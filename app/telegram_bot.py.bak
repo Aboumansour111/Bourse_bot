@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import requests
 
 from dotenv import load_dotenv
 from telegram import Update
@@ -10,6 +11,39 @@ from telegram.ext import (
 )
 
 DB_PATH = "/opt/bourse-bot/data/bourse.db"
+GATEWAY_URL = "http://127.0.0.1:18080"
+
+
+def get_current_price(inscode):
+    """
+    دریافت آخرین معامله مستقیم از Gateway گوشی.
+    pDrCotVal = آخرین قیمت معامله‌شده
+    """
+    try:
+        response = requests.get(
+            f"{GATEWAY_URL}/quote/{inscode}",
+            timeout=10,
+        )
+        response.raise_for_status()
+
+        result = response.json()
+
+        if result.get("status") != "ok":
+            return None
+
+        data = result.get("data") or {}
+        price = data.get("pDrCotVal")
+
+        if price is None:
+            return None
+
+        return float(price)
+
+    except Exception as exc:
+        print(f"Gateway quote error for {inscode}: {exc}")
+        return None
+
+
 
 load_dotenv("/opt/bourse-bot/.env")
 
@@ -122,6 +156,7 @@ async def signals(update, context):
     picks = conn.execute("""
         SELECT
             rank_position,
+            inscode,
             symbol,
             entry_quality,
             risk_level,
@@ -188,7 +223,7 @@ async def signals(update, context):
                 f"کیفیت ورود: {row['entry_quality']:.1f}/100",
                 f"ریسک: {risk_label(row['risk_level'])}",
                 f"قیمت مرجع: {format_price(row['close_price'])}",
-                f"قیمت اکنون: {format_price(row['last_price'])}",
+                f"قیمت آخرین معامله: {format_price(get_current_price(row['inscode']))}",
                 f"مبلغ پیشنهادی: {format_price(row['allocation'])}",
                 f"تعداد پیشنهادی: {row['quantity']:,}",
                 f"ارزش خرید: {format_price(row['position_value'])}",

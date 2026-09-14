@@ -1,0 +1,46 @@
+Loading data...
+Building breadth...
+Generating ALL candidates...
+Total candidates: 470
+
+======================================================================
+IN-SAMPLE (entry <= 2022)
+======================================================================
+Candidates: 18
+Accepted trades: 14
+Final equity     : 96,919,977
+Total return     : -3.08%
+Win rate         : 35.7%
+Profit Factor    : 0.63
+Avg return/trade : -0.83%
+Max Drawdown     : -7.02%
+Total PnL        : -3,080,023
+
+======================================================================
+OUT-OF-SAMPLE (entry >= 2023)
+======================================================================
+Candidates: 452
+Accepted trades: 78
+Final equity     : 149,160,807
+Total return     : 49.16%
+Win rate         : 57.7%
+Profit Factor    : 2.33
+Avg return/trade : 2.77%
+Max Drawdown     : -8.80%
+Total PnL        : 49,160,807
+
+======================================================================
+RECENT ONLY (entry >= 2024)
+======================================================================
+Candidates: 452
+Accepted trades: 78
+Final equity     : 149,160,807
+Total return     : 49.16%
+Win rate         : 57.7%
+Profit Factor    : 2.33
+Avg return/trade : 2.77%
+Max Drawdown     : -8.80%
+Total PnL        : 49,160,807
+
+[DONE]
+Report saved to: /opt/bourse-bot/artifacts/v7a_oos_report.txt

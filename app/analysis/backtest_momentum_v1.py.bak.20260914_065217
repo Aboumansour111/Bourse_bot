@@ -1,0 +1,251 @@
+import sqlite3
+from collections import defaultdict
+
+DB_PATH = "/opt/bourse-bot/data/bourse.db"
+
+INITIAL_CAPITAL = 100_000_000.0
+MAX_POSITIONS = 5
+MAX_ALLOC_PER_POS = 0.20  # 20% per position
+ROUND_TRIP_FEE = 0.007
+ENTRY_FEE = ROUND_TRIP_FEE / 2
+EXIT_FEE = ROUND_TRIP_FEE / 2
+
+# Strategy Parameters
+MIN_VALUE = 2_000_000_000  # 2 Billion Rials liquidity filter
+VOL_SPIKE_RATIO = 2.5      # Volume >= 2.5 * SMA20(Volume)
+PRICE_CHANGE_MIN = 0.03    # Today's gain >= +3%
+MAX_HOLD_DAYS = 10
+TAKE_PROFIT = 0.08         # +8%
+STOP_LOSS = -0.04          # -4%
+
+
+def load_data(conn):
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT dp.inscode, s.symbol, dp.trade_date, dp.first_price, dp.high_price, 
+               dp.low_price, dp.close_price, dp.yesterday_price, dp.volume, dp.value
+        FROM daily_prices dp
+        LEFT JOIN symbols s ON dp.inscode = s.inscode
+        WHERE dp.trade_date IS NOT NULL AND dp.close_price > 0
+        ORDER BY dp.trade_date ASC, dp.inscode ASC
+    """)
+    
+    data_by_symbol = defaultdict(list)
+    dates_set = set()
+    
+    for row in cur.fetchall():
+        inscode, symbol, t_date, f_p, h_p, l_p, c_p, y_p, vol, val = row
+        sym_name = symbol if symbol else str(inscode)
+        dates_set.add(t_date)
+        data_by_symbol[inscode].append({
+            "inscode": inscode,
+            "symbol": sym_name,
+            "date": t_date,
+            "first": f_p,
+            "high": h_p,
+            "low": l_p,
+            "close": c_p,
+            "yesterday": y_p if (y_p and y_p > 0) else c_p,
+            "volume": vol or 0.0,
+            "value": val or 0.0,
+        })
+    return data_by_symbol, sorted(list(dates_set))
+
+
+def run_backtest():
+    print(f"[+] Connecting to SQLite: {DB_PATH}")
+    conn = sqlite3.connect(DB_PATH)
+    data_by_symbol, all_dates = load_data(conn)
+    conn.close()
+
+    print(f"[+] Loaded {len(data_by_symbol)} symbols across {len(all_dates)} trading dates.")
+
+    # Index data: date -> symbol -> candle
+    market_by_date = defaultdict(dict)
+    for inscode, candles in data_by_symbol.items():
+        for c in candles:
+            market_by_date[c["date"]][inscode] = c
+
+    # Rolling indicators tracking
+    history = defaultdict(lambda: {"closes": [], "volumes": []})
+    
+    signals_by_date = defaultdict(list)
+
+    print("[+] Scanning indicators and detecting signals...")
+    for t_date in all_dates:
+        for inscode, c in market_by_date[t_date].items():
+            closes = history[inscode]["closes"]
+            volumes = history[inscode]["volumes"]
+
+            closes.append(c["close"])
+            volumes.append(c["volume"])
+
+            # Need at least 20 periods
+            if len(closes) >= 20:
+                sma20_price = sum(closes[-20:]) / 20.0
+                sma20_vol = sum(volumes[-20:]) / 20.0
+
+                if sma20_vol > 0:
+                    vol_ratio = c["volume"] / sma20_vol
+                else:
+                    vol_ratio = 0.0
+
+                p_change = (c["close"] - c["yesterday"]) / c["yesterday"]
+
+                # Entry conditions
+                if (c["value"] >= MIN_VALUE and
+                    vol_ratio >= VOL_SPIKE_RATIO and
+                    p_change >= PRICE_CHANGE_MIN and
+                    c["close"] > sma20_price):
+
+                    signals_by_date[t_date].append({
+                        "inscode": inscode,
+                        "symbol": c["symbol"],
+                        "score": vol_ratio * (1.0 + p_change),
+                        "close": c["close"]
+                    })
+
+    # Portfolio Simulation
+    print("[+] Simulating execution...")
+    cash = INITIAL_CAPITAL
+    portfolio = {}  # inscode -> {entry_date, entry_price, qty, hold_days, symbol}
+    closed_trades = []
+    equity_curve = []
+    peak_equity = INITIAL_CAPITAL
+    max_drawdown = 0.0
+
+    for t_date in all_dates:
+        today_data = market_by_date[t_date]
+
+        # 1. Update existing positions & Check Exit
+        to_remove = []
+        for inscode, pos in portfolio.items():
+            if inscode not in today_data:
+                continue
+
+            c = today_data[inscode]
+            pos["hold_days"] += 1
+
+            # PnL using High/Low/Close of the day
+            gain_high = (c["high"] - pos["entry_price"]) / pos["entry_price"]
+            gain_low = (c["low"] - pos["entry_price"]) / pos["entry_price"]
+            gain_close = (c["close"] - pos["entry_price"]) / pos["entry_price"]
+
+            exit_reason = None
+            exit_price = None
+
+            if gain_low <= STOP_LOSS:
+                exit_reason = "Stop Loss (-4%)"
+                exit_price = pos["entry_price"] * (1 + STOP_LOSS)
+            elif gain_high >= TAKE_PROFIT:
+                exit_reason = "Take Profit (+8%)"
+                exit_price = pos["entry_price"] * (1 + TAKE_PROFIT)
+            elif pos["hold_days"] >= MAX_HOLD_DAYS:
+                exit_reason = "Time Exit (10D)"
+                exit_price = c["close"]
+
+            if exit_reason:
+                gross_proceeds = pos["qty"] * exit_price
+                net_proceeds = gross_proceeds * (1 - EXIT_FEE)
+                pnl = net_proceeds - pos["invested_cost"]
+                ret_pct = pnl / pos["invested_cost"]
+
+                closed_trades.append({
+                    "symbol": pos["symbol"],
+                    "inscode": inscode,
+                    "entry_date": pos["entry_date"],
+                    "exit_date": t_date,
+                    "hold_days": pos["hold_days"],
+                    "pnl": pnl,
+                    "return_pct": ret_pct,
+                    "reason": exit_reason
+                })
+
+                cash += net_proceeds
+                to_remove.append(inscode)
+
+        for inscode in to_remove:
+            del portfolio[inscode]
+
+        # 2. Enter new positions (rank by signal score)
+        candidates = signals_by_date.get(t_date, [])
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+
+        for cand in candidates:
+            if len(portfolio) >= MAX_POSITIONS:
+                break
+
+            inscode = cand["inscode"]
+            if inscode in portfolio or inscode not in today_data:
+                continue
+
+            c = today_data[inscode]
+            max_alloc = INITIAL_CAPITAL * MAX_ALLOC_PER_POS
+            avail_funds = min(cash, max_alloc)
+
+            if avail_funds < 1_000_000:
+                continue
+
+            entry_price = c["close"]
+            qty = int((avail_funds / (1 + ENTRY_FEE)) // entry_price)
+
+            if qty <= 0:
+                continue
+
+            invested_cost = qty * entry_price * (1 + ENTRY_FEE)
+            cash -= invested_cost
+
+            portfolio[inscode] = {
+                "symbol": cand["symbol"],
+                "entry_date": t_date,
+                "entry_price": entry_price,
+                "qty": qty,
+                "invested_cost": invested_cost,
+                "hold_days": 0
+            }
+
+        # Calculate Equity
+        pos_value = 0.0
+        for inscode, pos in portfolio.items():
+            current_price = today_data[inscode]["close"] if inscode in today_data else pos["entry_price"]
+            pos_value += pos["qty"] * current_price * (1 - EXIT_FEE)
+
+        current_equity = cash + pos_value
+        peak_equity = max(peak_equity, current_equity)
+        dd = (peak_equity - current_equity) / peak_equity
+        max_drawdown = max(max_drawdown, dd)
+        equity_curve.append((t_date, current_equity))
+
+    # Output Statistics
+    final_equity = equity_curve[-1][1] if equity_curve else INITIAL_CAPITAL
+    total_return = (final_equity - INITIAL_CAPITAL) / INITIAL_CAPITAL * 100
+    wins = [t for t in closed_trades if t["pnl"] > 0]
+    losses = [t for t in closed_trades if t["pnl"] <= 0]
+    win_rate = (len(wins) / len(closed_trades) * 100) if closed_trades else 0.0
+    total_gain = sum(t["pnl"] for t in wins)
+    total_loss = abs(sum(t["pnl"] for t in losses)) if losses else 1.0
+    profit_factor = (total_gain / total_loss) if total_loss > 0 else float("inf")
+
+    print("\n" + "=" * 55)
+    print("       BACKTEST RESULTS: MOMENTUM + VOLUME SPIKE V1")
+    print("=" * 55)
+    print(f"Initial Capital   : {INITIAL_CAPITAL:,.0f} Rials")
+    print(f"Final Equity      : {final_equity:,.0f} Rials")
+    print(f"Total Return      : {total_return:+.2f}%")
+    print(f"Max Drawdown (MDD): {max_drawdown * 100:.2f}%")
+    print(f"Total Trades      : {len(closed_trades)}")
+    print(f"Winning Trades    : {len(wins)} ({win_rate:.1f}%)")
+    print(f"Losing Trades     : {len(losses)} ({100 - win_rate:.1f}%)")
+    print(f"Profit Factor     : {profit_factor:.2f}")
+
+    if closed_trades:
+        avg_days = sum(t["hold_days"] for t in closed_trades) / len(closed_trades)
+        print(f"Avg Holding Days  : {avg_days:.1f} days")
+        print("\nLast 5 Trades Sample:")
+        for t in closed_trades[-5:]:
+            print(f"  [{t['exit_date']}] {t['symbol']:<10} Return: {t['return_pct']*100:+5.2f}% | Hold: {t['hold_days']}d | Exit: {t['reason']}")
+    print("=" * 55)
+
+
+if __name__ == "__main__":
+    run_backtest()

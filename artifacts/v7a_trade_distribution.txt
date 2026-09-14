@@ -1,0 +1,68 @@
+Loading data...
+Building breadth...
+Generating candidates...
+Simulating portfolio...
+Accepted trades: 92
+Final equity: 144,557,759
+Overall Max DD: -8.80%
+
+======================================================================
+TRADE DISTRIBUTION ANALYSIS
+======================================================================
+
+Total trades          : 92
+Total PnL             : 44,557,759
+Gross Profit          : 88,676,011
+Gross Loss            : 44,118,252
+Profit Factor         : 2.01
+
+Average return/trade  : 2.22%
+Median return/trade   : 3.42%
+Std Dev of returns    : 6.95%
+
+--- Contribution of best trades ---
+Top  1 trades contribute :    2,784,085  (+6.2% of total PnL)
+Top  3 trades contribute :    8,236,792  (+18.5% of total PnL)
+Top  5 trades contribute :   13,584,142  (+30.5% of total PnL)
+Top 10 trades contribute :   25,199,073  (+56.6% of total PnL)
+
+--- Result after removing best trades ---
+After removing top 5:
+  Trades left     : 87
+  Remaining PnL   : 30,973,617
+  Win rate        : 51.7%
+  Avg return      : 1.76%
+  Final equity approx: 130,973,617
+After removing top 10:
+  Trades left     : 82
+  Remaining PnL   : 19,358,686
+  Win rate        : 48.8%
+  Avg return      : 1.27%
+  Final equity approx: 119,358,686
+
+--- Best 10 trades (by PnL) ---
+ 1. ما         20260906 → 20260912  PnL= 2,784,085  Ret= 10.18%  TARGET
+ 2. وساخت      20260906 → 20260912  PnL= 2,761,496  Ret= 10.10%  TARGET
+ 3. شبريز      20260819 → 20260829  PnL= 2,691,212  Ret= 10.13%  TARGET
+ 4. آبادا      20260808 → 20260817  PnL= 2,676,559  Ret= 10.21%  TARGET
+ 5. كبافق      20260906 → 20260912  PnL= 2,670,791  Ret= 10.66%  TIME
+ 6. ما         20260805 → 20260819  PnL= 2,401,056  Ret=  9.25%  TARGET
+ 7. كمنگنز     20260627 → 20260708  PnL= 2,380,797  Ret= 10.75%  TARGET
+ 8. قپيرا      20260729 → 20260805  PnL= 2,301,952  Ret=  9.57%  TARGET
+ 9. قصفها      20260822 → 20260906  PnL= 2,275,757  Ret=  8.49%  TIME
+10. چدن        20260602 → 20260613  PnL= 2,255,370  Ret= 10.38%  TARGET
+
+--- Worst 10 trades (by PnL) ---
+ 1. بورس       20260901 → 20260905  PnL=-1,626,947  Ret= -5.89%  STOP
+ 2. غشهد       20260829 → 20260905  PnL=-1,595,674  Ret= -6.53%  STOP
+ 3. كپارس      20260707 → 20260712  PnL=-1,483,541  Ret= -5.90%  STOP
+ 4. فباهنر     20260808 → 20260815  PnL=-1,468,431  Ret= -5.57%  STOP
+ 5. غگل        20260823 → 20260901  PnL=-1,453,260  Ret= -5.45%  STOP
+ 6. كاوه       20260628 → 20260713  PnL=-1,447,879  Ret= -6.18%  STOP
+ 7. كطبس       20260627 → 20260629  PnL=-1,439,150  Ret= -5.87%  STOP
+ 8. آبادا      20260711 → 20260713  PnL=-1,432,292  Ret= -6.35%  STOP
+ 9. ولغدر      20260707 → 20260712  PnL=-1,406,149  Ret= -6.61%  STOP
+10. شنفت       20260607 → 20260615  PnL=-1,393,735  Ret= -6.11%  STOP
+
+[DONE]
+Report saved to: /opt/bourse-bot/artifacts/v7a_trade_distribution.txt

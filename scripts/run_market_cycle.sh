@@ -1,0 +1,51 @@
+#!/bin/bash
+
+set -euo pipefail
+
+cd /opt/bourse-bot
+
+PYTHON="/opt/bourse-bot/.venv/bin/python"
+
+echo
+echo "========================================"
+echo " MARKET CYCLE START"
+echo " $(date '+%Y-%m-%d %H:%M:%S')"
+echo "========================================"
+
+echo
+echo "[1/8] Updating daily prices..."
+"$PYTHON" app/collector/daily_update.py
+
+echo
+echo "[2/8] Running technical analysis..."
+"$PYTHON" app/analysis/technical_scan.py
+
+echo
+echo "[3/8] Running scoring engine..."
+"$PYTHON" app/analysis/scoring_engine.py
+
+echo
+echo "[4/8] Updating market context..."
+"$PYTHON" app/analysis/market_context.py
+
+echo
+echo "[5/8] Building final ranking..."
+"$PYTHON" app/analysis/final_ranking.py
+
+echo
+echo "[6/8] Running decision engine..."
+"$PYTHON" app/analysis/decision_engine.py
+
+echo
+echo "[7/8] Filtering entries..."
+"$PYTHON" app/analysis/entry_filter.py
+
+echo
+echo "[8/8] Building top picks..."
+"$PYTHON" app/analysis/top_picks.py
+
+echo
+echo "========================================"
+echo " MARKET CYCLE COMPLETE"
+echo " $(date '+%Y-%m-%d %H:%M:%S')"
+echo "========================================"

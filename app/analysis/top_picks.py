@@ -8,7 +8,8 @@ RESERVE_RATIO = 0.20
 
 def main():
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row                  
+    conn.row_factory = sqlite3.Row
+
     cash_row = conn.execute(
         "SELECT amount FROM cash_balance WHERE id = 1"
     ).fetchone()
@@ -16,7 +17,8 @@ def main():
     cash = float(cash_row["amount"]) if cash_row else 0.0
 
     market = conn.execute("""
-        SELECT market_state FROM market_context
+        SELECT market_state
+        FROM market_context
         ORDER BY trade_date DESC
         LIMIT 1
     """).fetchone()
@@ -27,20 +29,32 @@ def main():
         else "NEUTRAL"
     )
 
+    # قیمت مرجع از entry_signals می‌آید.
+    # قیمت اکنون مستقیماً از آخرین last_price موجود
+    # در daily_prices گرفته می‌شود.
     candidates = conn.execute("""
         SELECT
-            inscode,
-            symbol,
-            entry_quality,
-            risk_level,
-            close_price,
-            last_price,
-            stop_loss,
-            target1,
-            target2
-        FROM entry_signals
-        WHERE action = 'BUY_NOW'
-        ORDER BY entry_quality DESC
+            e.inscode,
+            e.symbol,
+            e.entry_quality,
+            e.risk_level,
+            e.close_price,
+            COALESCE(
+                (
+                    SELECT dp.last_price
+                    FROM daily_prices dp
+                    WHERE dp.inscode = e.inscode
+                    ORDER BY dp.trade_date DESC
+                    LIMIT 1
+                ),
+                e.close_price
+            ) AS last_price,
+            e.stop_loss,
+            e.target1,
+            e.target2
+        FROM entry_signals e
+        WHERE e.action = 'BUY_NOW'
+        ORDER BY e.entry_quality DESC
         LIMIT 20
     """).fetchall()
 
@@ -121,11 +135,19 @@ def main():
     for rank, (row, weighted_score) in enumerate(
         selected, 1
     ):
-        # اولویت با قیمت لحظه‌ای (last_price)؛ در صورت عدم وجود، قیمت پایانی (close_price)
-        last_price_val = float(row["last_price"] or 0) if "last_price" in row.keys() and row["last_price"] is not None else 0.0
+        # قیمت مرجع = قیمت پایانی که سیگنال بر اساس آن ساخته شده
         close_price_val = float(row["close_price"] or 0)
-        
-        price = last_price_val if last_price_val > 0 else close_price_val
+
+        # قیمت اکنون = آخرین معامله ثبت‌شده در daily_prices
+        last_price_val = float(row["last_price"] or 0)
+
+        # برای محاسبه تعداد سهم، اولویت با قیمت اکنون است.
+        # اگر قیمت اکنون موجود نباشد، قیمت مرجع استفاده می‌شود.
+        price = (
+            last_price_val
+            if last_price_val > 0
+            else close_price_val
+        )
 
         if price <= 0:
             continue

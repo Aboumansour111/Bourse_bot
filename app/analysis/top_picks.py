@@ -8,8 +8,7 @@ RESERVE_RATIO = 0.20
 
 def main():
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-
+    conn.row_factory = sqlite3.Row                  
     cash_row = conn.execute(
         "SELECT amount FROM cash_balance WHERE id = 1"
     ).fetchone()
@@ -17,8 +16,7 @@ def main():
     cash = float(cash_row["amount"]) if cash_row else 0.0
 
     market = conn.execute("""
-        SELECT market_state
-        FROM market_context
+        SELECT market_state FROM market_context
         ORDER BY trade_date DESC
         LIMIT 1
     """).fetchone()
@@ -36,6 +34,7 @@ def main():
             entry_quality,
             risk_level,
             close_price,
+            last_price,
             stop_loss,
             target1,
             target2
@@ -53,6 +52,7 @@ def main():
             entry_quality REAL,
             risk_level TEXT,
             close_price REAL,
+            last_price REAL,
             stop_loss REAL,
             target1 REAL,
             target2 REAL,
@@ -121,7 +121,11 @@ def main():
     for rank, (row, weighted_score) in enumerate(
         selected, 1
     ):
-        price = float(row["close_price"] or 0)
+        # اولویت با قیمت لحظه‌ای (last_price)؛ در صورت عدم وجود، قیمت پایانی (close_price)
+        last_price_val = float(row["last_price"] or 0) if "last_price" in row.keys() and row["last_price"] is not None else 0.0
+        close_price_val = float(row["close_price"] or 0)
+        
+        price = last_price_val if last_price_val > 0 else close_price_val
 
         if price <= 0:
             continue
@@ -143,6 +147,7 @@ def main():
                 entry_quality,
                 risk_level,
                 close_price,
+                last_price,
                 stop_loss,
                 target1,
                 target2,
@@ -151,14 +156,15 @@ def main():
                 position_value,
                 market_state
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             rank,
             row["inscode"],
             row["symbol"],
             row["entry_quality"],
             row["risk_level"],
-            price,
+            close_price_val,
+            last_price_val,
             row["stop_loss"],
             row["target1"],
             row["target2"],
@@ -178,7 +184,8 @@ def main():
         )
 
         print(
-            f"   Price={price:,.0f} | "
+            f"   Price(Live)={price:,.0f} | "
+            f"Close={close_price_val:,.0f} | "
             f"Stop={float(row['stop_loss'] or 0):,.0f} | "
             f"T1={float(row['target1'] or 0):,.0f} | "
             f"T2={float(row['target2'] or 0):,.0f}"

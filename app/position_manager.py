@@ -216,27 +216,42 @@ def initialize_position_after_buy(
     return get_position_level(inscode)
 
 
-def determine_state(price, levels, decision):
+def determine_state(price, levels, decision, previous_state=None):
     stop_loss = levels["stop_loss"]
     target1 = levels["target1"]
     target2 = levels["target2"]
 
     action = decision["action"] if decision else None
 
+    # حد ضرر همیشه بالاترین اولویت را دارد.
     if stop_loss is not None and price <= float(stop_loss):
         return "STOP_LOSS"
 
-    if target2 is not None and price >= float(target2):
-        return "TARGET2"
-
-    if target1 is not None and price >= float(target1):
-        return "TARGET1"
-
+    # اگر موتور تحلیل صراحتاً خروج یا کاهش را پیشنهاد کرده،
+    # این تصمیم نباید توسط Target پنهان شود.
     if action == "EXIT":
         return "EXIT"
 
     if action == "REDUCE":
         return "REDUCE"
+
+    # وضعیت‌های Target به صورت پیش‌رونده هستند.
+    # بعد از رسیدن به Target1، افت قیمت نباید وضعیت را به HOLD برگرداند.
+    if previous_state in ("TARGET2",):
+        return "TARGET2"
+
+    if previous_state in ("TARGET1",):
+        if target2 is not None and price >= float(target2):
+            return "TARGET2"
+
+        return "TARGET1"
+
+    # تعیین Target برای موقعیت‌هایی که هنوز به Target نرسیده‌اند.
+    if target2 is not None and price >= float(target2):
+        return "TARGET2"
+
+    if target1 is not None and price >= float(target1):
+        return "TARGET1"
 
     return "HOLD"
 
@@ -399,13 +414,14 @@ def process_position(
         print(f"{symbol}: live price unavailable")
         return
 
+    previous_state = levels["last_state"]
+
     state = determine_state(
         price,
         levels,
         decision,
+        previous_state,
     )
-
-    previous_state = levels["last_state"]
 
     print()
     print("=" * 60)
@@ -420,11 +436,12 @@ def process_position(
     print("=" * 60)
 
     if initialized:
-        update_state(
-            inscode,
-            state,
-            price,
-        )
+        if not dry_run:
+            update_state(
+                inscode,
+                state,
+                price,
+            )
 
         print(
             f"{symbol}: initial state recorded; "
@@ -434,14 +451,19 @@ def process_position(
         return
 
     if initialize_only:
+        print(
+            f"{symbol}: initialize-only mode; "
+            f"no state change and no alert."
+        )
         return
 
     if state == previous_state:
-        update_state(
-            inscode,
-            state,
-            price,
-        )
+        if not dry_run:
+            update_state(
+                inscode,
+                state,
+                price,
+            )
 
         print(
             f"{symbol}: no state change; no alert."
@@ -462,17 +484,31 @@ def process_position(
         print("----- DRY RUN TELEGRAM MESSAGE -----")
         print(message)
         print("----- END DRY RUN -----")
-    else:
-        if send_telegram(message):
-            print(f"{symbol}: Telegram alert sent.")
-        else:
-            print(f"{symbol}: Telegram alert failed.")
+        print(
+            f"{symbol}: dry-run only; "
+            f"state remains {previous_state}."
+        )
+        return
 
-    update_state(
-        inscode,
-        state,
-        price,
-    )
+    if send_telegram(message):
+        print(f"{symbol}: Telegram alert sent.")
+
+        update_state(
+            inscode,
+            state,
+            price,
+        )
+
+        print(
+            f"{symbol}: state updated "
+            f"{previous_state} -> {state}."
+        )
+
+    else:
+        print(
+            f"{symbol}: Telegram alert failed; "
+            f"state remains {previous_state}."
+        )
 
 
 def main():

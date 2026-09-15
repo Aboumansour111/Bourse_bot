@@ -2,20 +2,6 @@
 
 set -euo pipefail
 
-LOCK_FILE="/opt/bourse-bot/data/market_cycle.lock"
-
-exec 9>"$LOCK_FILE"
-
-if ! /usr/bin/flock -n 9; then
-    echo
-    echo "========================================"
-    echo " MARKET CYCLE SKIPPED"
-    echo " Another cycle is already running."
-    echo " $(date '+%Y-%m-%d %H:%M:%S')"
-    echo "========================================"
-    exit 0
-fi
-
 cd /opt/bourse-bot
 
 PYTHON="/opt/bourse-bot/.venv/bin/python"
@@ -65,4 +51,5 @@ echo "[9/9] Checking portfolio positions..."
 echo
 echo "========================================"
 echo " MARKET CYCLE COMPLETE"
+echo " $(date '+%Y-%m-%d %H:%M:%S')"
 echo "========================================"

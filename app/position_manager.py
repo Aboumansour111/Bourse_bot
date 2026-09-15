@@ -175,20 +175,48 @@ def update_state(inscode, state, price):
     conn.close()
 
 
+def initialize_position_after_buy(
+    inscode,
+    symbol,
+    quantity,
+    average_price,
+):
+    existing = get_position_level(inscode)
+
+    if existing:
+        print(
+            f"{symbol}: existing position levels preserved."
+        )
+        return existing
+
+    decision = get_decision(inscode)
+
+    if not decision:
+        print(
+            f"{symbol}: no decision_results available; "
+            f"position levels will be initialized later."
+        )
+        return None
+
+    save_position_level(
+        inscode=int(inscode),
+        symbol=symbol,
+        quantity=int(quantity),
+        average_price=float(average_price),
+        stop_loss=decision["stop_loss"],
+        target1=decision["target1"],
+        target2=decision["target2"],
+        last_state="INIT",
+    )
+
+    print(
+        f"{symbol}: position levels initialized after buy."
+    )
+
+    return get_position_level(inscode)
+
+
 def determine_state(price, levels, decision):
-    """
-    اولویت هشدارها:
-
-    1. STOP LOSS
-    2. TARGET 2
-    3. TARGET 1
-    4. EXIT
-    5. REDUCE
-    6. HOLD
-
-    هیچ معامله‌ای اینجا انجام نمی‌شود.
-    """
-
     stop_loss = levels["stop_loss"]
     target1 = levels["target1"]
     target2 = levels["target2"]
@@ -239,6 +267,7 @@ def action_text(state):
 def format_price(value):
     if value is None:
         return "-"
+
     return f"{float(value):,.0f}"
 
 
@@ -248,6 +277,7 @@ def build_message(position, price, levels, decision, state):
     average = float(position["average_price"])
 
     pnl = (price - average) * quantity
+
     pnl_percent = (
         ((price - average) / average) * 100
         if average > 0
@@ -283,7 +313,7 @@ def build_message(position, price, levels, decision, state):
     if decision and decision["reason"]:
         lines.extend([
             "",
-            f"دلیل تحلیل:",
+            "دلیل تحلیل:",
             decision["reason"],
         ])
 
@@ -325,90 +355,11 @@ def send_telegram(message):
         return False
 
 
-def ensure_position_levels(position, decision):
-    """
-    اگر موقعیت قبلاً ثبت شده باشد، سطوح آن تغییر نمی‌کنند.
-
-    برای موقعیت قدیمی که هنوز position_levels ندارد،
-    سطوح فعلی decision_results فقط یک بار به عنوان مبنا ذخیره می‌شوند.
-    """
-
-    existing = get_position_level(position["inscode"])
-
-    if existing:
-        return existing, False
-
-    if not decision:
-        print(
-            f"{position['symbol']}: no decision data; "
-            f"cannot initialize levels."
-        )
-        return None, False
-
-    save_position_level(
-        inscode=int(position["inscode"]),
-        symbol=position["symbol"],
-        quantity=int(position["quantity"]),
-        average_price=float(position["average_price"]),
-        stop_loss=decision["stop_loss"],
-        target1=decision["target1"],
-        target2=decision["target2"],
-        last_state="INIT",
-    )
-
-    return get_position_level(position["inscode"]), True
-
-
-
-def initialize_position_after_buy(
-    inscode,
-    symbol,
-    quantity,
-    average_price,
+def process_position(
+    position,
+    dry_run=False,
+    initialize_only=False,
 ):
-    """
-    بعد از خرید موفق، سطوح موقعیت را فقط در صورتی ایجاد می‌کند
-    که این موقعیت قبلاً position_levels نداشته باشد.
-
-    اگر موقعیت از قبل وجود داشته باشد، حد ضرر و اهداف قبلی حفظ می‌شوند.
-    """
-
-    existing = get_position_level(inscode)
-
-    if existing:
-        print(
-            f"{symbol}: existing position levels preserved."
-        )
-        return existing
-
-    decision = get_decision(inscode)
-
-    if not decision:
-        print(
-            f"{symbol}: no decision_results available; "
-            f"position levels will be initialized later."
-        )
-        return None
-
-    save_position_level(
-        inscode=int(inscode),
-        symbol=symbol,
-        quantity=int(quantity),
-        average_price=float(average_price),
-        stop_loss=decision["stop_loss"],
-        target1=decision["target1"],
-        target2=decision["target2"],
-        last_state="INIT",
-    )
-
-    print(
-        f"{symbol}: position levels initialized after buy."
-    )
-
-    return get_position_level(inscode)
-
-
-def process_position(position, dry_run=False, initialize_only=False):
     inscode = int(position["inscode"])
     symbol = position["symbol"]
 
@@ -418,13 +369,29 @@ def process_position(position, dry_run=False, initialize_only=False):
         print(f"{symbol}: no decision_results")
         return
 
-    levels, initialized = ensure_position_levels(
-        position,
-        decision,
-    )
+    levels = get_position_level(inscode)
+
+    initialized = False
 
     if not levels:
-        return
+        save_position_level(
+            inscode=inscode,
+            symbol=symbol,
+            quantity=int(position["quantity"]),
+            average_price=float(position["average_price"]),
+            stop_loss=decision["stop_loss"],
+            target1=decision["target1"],
+            target2=decision["target2"],
+            last_state="INIT",
+        )
+
+        levels = get_position_level(inscode)
+        initialized = True
+
+        print(
+            f"{symbol}: position levels initialized "
+            f"from current decision_results."
+        )
 
     price = get_current_price(inscode)
 
@@ -442,7 +409,7 @@ def process_position(position, dry_run=False, initialize_only=False):
 
     print()
     print("=" * 60)
-    print(f"{symbol}")
+    print(symbol)
     print(f"Live price : {format_price(price)}")
     print(f"Average    : {format_price(position['average_price'])}")
     print(f"Stop       : {format_price(levels['stop_loss'])}")
@@ -453,13 +420,18 @@ def process_position(position, dry_run=False, initialize_only=False):
     print("=" * 60)
 
     if initialized:
-        print(
-            f"{symbol}: position levels initialized "
-            f"from current decision_results."
+        update_state(
+            inscode,
+            state,
+            price,
         )
 
-        if initialize_only:
-            return
+        print(
+            f"{symbol}: initial state recorded; "
+            f"no alert sent."
+        )
+
+        return
 
     if initialize_only:
         return
@@ -470,7 +442,11 @@ def process_position(position, dry_run=False, initialize_only=False):
             state,
             price,
         )
-        print(f"{symbol}: no state change; no alert.")
+
+        print(
+            f"{symbol}: no state change; no alert."
+        )
+
         return
 
     message = build_message(

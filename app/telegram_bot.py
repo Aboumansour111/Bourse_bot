@@ -45,7 +45,6 @@ def get_current_price(inscode):
         return None
 
 
-
 load_dotenv("/opt/bourse-bot/.env")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -224,7 +223,8 @@ async def signals(update, context):
                 f"کیفیت ورود: {row['entry_quality']:.1f}/100",
                 f"ریسک: {risk_label(row['risk_level'])}",
                 f"قیمت مرجع: {format_price(row['close_price'])}",
-                f"قیمت آخرین معامله: {format_price(get_current_price(row['inscode']))}",
+                f"قیمت آخرین معامله: "
+                f"{format_price(get_current_price(row['inscode']))}",
                 f"مبلغ پیشنهادی: {format_price(row['allocation'])}",
                 f"تعداد پیشنهادی: {row['quantity']:,}",
                 f"ارزش خرید: {format_price(row['position_value'])}",
@@ -556,9 +556,13 @@ async def buy_command(update, context):
     try:
         quantity = int(context.args[1])
         price = float(context.args[2])
+
+        if quantity <= 0 or price <= 0:
+            raise ValueError
+
     except ValueError:
         await update.message.reply_text(
-            "تعداد و قیمت باید عدد باشند."
+            "تعداد و قیمت باید عدد مثبت باشند."
         )
         return
 
@@ -664,7 +668,12 @@ async def buy_command(update, context):
                 actual_symbol,
                 quantity,
                 price,
-                int(__import__("datetime").datetime.now().strftime("%Y%m%d")),
+                int(
+                    __import__("datetime")
+                    .datetime
+                    .now()
+                    .strftime("%Y%m%d")
+                ),
             ),
         )
 
@@ -682,6 +691,15 @@ async def buy_command(update, context):
 
         conn.commit()
         conn.close()
+
+        # اگر این اولین خرید باشد، position_levels ساخته می‌شود.
+        # اگر قبلاً وجود داشته باشد، سطوح قبلی حفظ می‌شوند.
+        initialize_position_after_buy(
+            inscode=inscode,
+            symbol=actual_symbol,
+            quantity=new_qty,
+            average_price=new_avg,
+        )
 
         await update.message.reply_text(
             f"✅ خرید ثبت شد\n\n"
@@ -716,9 +734,13 @@ async def sell_command(update, context):
     try:
         quantity = int(context.args[1])
         price = float(context.args[2])
+
+        if quantity <= 0 or price <= 0:
+            raise ValueError
+
     except ValueError:
         await update.message.reply_text(
-            "تعداد و قیمت باید عدد باشند."
+            "تعداد و قیمت باید عدد مثبت باشند."
         )
         return
 
@@ -782,6 +804,14 @@ async def sell_command(update, context):
                 "DELETE FROM portfolio WHERE inscode = ?",
                 (inscode,),
             )
+
+            # موقعیت کاملاً بسته شده؛
+            # سطوح قبلی نباید برای خرید بعدی باقی بمانند.
+            conn.execute(
+                "DELETE FROM position_levels WHERE inscode = ?",
+                (inscode,),
+            )
+
         else:
             conn.execute(
                 """
@@ -811,7 +841,12 @@ async def sell_command(update, context):
                 actual_symbol,
                 quantity,
                 price,
-                int(__import__("datetime").datetime.now().strftime("%Y%m%d")),
+                int(
+                    __import__("datetime")
+                    .datetime
+                    .now()
+                    .strftime("%Y%m%d")
+                ),
             ),
         )
 

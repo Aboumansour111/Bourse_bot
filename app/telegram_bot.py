@@ -19,30 +19,50 @@ def get_current_price(inscode):
     """
     دریافت آخرین معامله مستقیم از Gateway گوشی.
     pDrCotVal = آخرین قیمت معامله‌شده
+
+    در صورت خطای موقت Gateway، حداکثر ۳ بار تلاش می‌شود.
     """
-    try:
-        response = requests.get(
-            f"{GATEWAY_URL}/quote/{inscode}",
-            timeout=10,
-        )
-        response.raise_for_status()
+    max_attempts = 3
 
-        result = response.json()
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.get(
+                f"{GATEWAY_URL}/quote/{inscode}",
+                timeout=10,
+            )
+            response.raise_for_status()
 
-        if result.get("status") != "ok":
-            return None
+            result = response.json()
 
-        data = result.get("data") or {}
-        price = data.get("pDrCotVal")
+            if result.get("status") != "ok":
+                raise RuntimeError(
+                    f"Gateway returned status={result.get('status')}"
+                )
 
-        if price is None:
-            return None
+            data = result.get("data") or {}
+            price = data.get("pDrCotVal")
 
-        return float(price)
+            if price is None:
+                raise RuntimeError("pDrCotVal is missing")
 
-    except Exception as exc:
-        print(f"Gateway quote error for {inscode}: {exc}")
-        return None
+            return float(price)
+
+        except Exception as exc:
+            print(
+                f"Gateway quote error for {inscode} "
+                f"(attempt {attempt}/{max_attempts}): {exc}"
+            )
+
+            if attempt < max_attempts:
+                import time
+                time.sleep(1)
+
+    print(
+        f"Gateway quote failed after {max_attempts} attempts "
+        f"for {inscode}."
+    )
+
+    return None
 
 
 load_dotenv("/opt/bourse-bot/.env")

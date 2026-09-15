@@ -22,29 +22,47 @@ def get_conn():
 
 
 def get_current_price(inscode):
-    try:
-        response = requests.get(
-            f"{GATEWAY_URL}/quote/{inscode}",
-            timeout=10,
-        )
-        response.raise_for_status()
+    max_attempts = 3
 
-        result = response.json()
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.get(
+                f"{GATEWAY_URL}/quote/{inscode}",
+                timeout=10,
+            )
+            response.raise_for_status()
 
-        if result.get("status") != "ok":
-            return None
+            result = response.json()
 
-        data = result.get("data") or {}
-        price = data.get("pDrCotVal")
+            if result.get("status") != "ok":
+                raise RuntimeError(
+                    f"Gateway returned status={result.get('status')}"
+                )
 
-        if price is None:
-            return None
+            data = result.get("data") or {}
+            price = data.get("pDrCotVal")
 
-        return float(price)
+            if price is None:
+                raise RuntimeError("pDrCotVal is missing")
 
-    except Exception as exc:
-        print(f"Gateway quote error for {inscode}: {exc}")
-        return None
+            return float(price)
+
+        except Exception as exc:
+            print(
+                f"Gateway quote error for {inscode} "
+                f"(attempt {attempt}/{max_attempts}): {exc}"
+            )
+
+            if attempt < max_attempts:
+                import time
+                time.sleep(1)
+
+    print(
+        f"Gateway quote failed after {max_attempts} attempts "
+        f"for {inscode}."
+    )
+
+    return None
 
 
 def get_positions():
@@ -224,27 +242,39 @@ def determine_state(price, levels, decision, previous_state=None):
     action = decision["action"] if decision else None
 
     # حد ضرر همیشه بالاترین اولویت را دارد.
+    # حتی اگر وضعیت قبلی EXIT/REDUCE/TARGET باشد،
+    # رسیدن قیمت به حد ضرر باید STOP_LOSS ثبت کند.
     if stop_loss is not None and price <= float(stop_loss):
         return "STOP_LOSS"
 
+    # وضعیت‌های نهایی/هشدارهای قبلی نباید با تغییر موقت تحلیل
+    # به HOLD یا وضعیت پایین‌تر برگردند.
+    if previous_state == "STOP_LOSS":
+        return "STOP_LOSS"
+
+    if previous_state == "EXIT":
+        return "EXIT"
+
+    if previous_state == "REDUCE":
+        return "REDUCE"
+
+    if previous_state == "TARGET2":
+        return "TARGET2"
+
+    # Target1 فقط می‌تواند به Target2 ارتقا پیدا کند.
+    if previous_state == "TARGET1":
+        if target2 is not None and price >= float(target2):
+            return "TARGET2"
+
+        return "TARGET1"
+
     # اگر موتور تحلیل صراحتاً خروج یا کاهش را پیشنهاد کرده،
-    # این تصمیم نباید توسط Target پنهان شود.
+    # این تصمیم باید بر Targetهای جدید اولویت داشته باشد.
     if action == "EXIT":
         return "EXIT"
 
     if action == "REDUCE":
         return "REDUCE"
-
-    # وضعیت‌های Target به صورت پیش‌رونده هستند.
-    # بعد از رسیدن به Target1، افت قیمت نباید وضعیت را به HOLD برگرداند.
-    if previous_state in ("TARGET2",):
-        return "TARGET2"
-
-    if previous_state in ("TARGET1",):
-        if target2 is not None and price >= float(target2):
-            return "TARGET2"
-
-        return "TARGET1"
 
     # تعیین Target برای موقعیت‌هایی که هنوز به Target نرسیده‌اند.
     if target2 is not None and price >= float(target2):
@@ -254,7 +284,6 @@ def determine_state(price, levels, decision, previous_state=None):
         return "TARGET1"
 
     return "HOLD"
-
 
 def state_label(state):
     return {

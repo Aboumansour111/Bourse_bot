@@ -202,10 +202,32 @@ def initialize_position_after_buy(
     existing = get_position_level(inscode)
 
     if existing:
-        print(
-            f"{symbol}: existing position levels preserved."
+        conn = get_conn()
+
+        conn.execute(
+            """
+            UPDATE position_levels
+            SET entry_quantity = ?,
+                entry_average_price = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE inscode = ?
+            """,
+            (
+                int(quantity),
+                float(average_price),
+                int(inscode),
+            ),
         )
-        return existing
+
+        conn.commit()
+        conn.close()
+
+        print(
+            f"{symbol}: existing position levels preserved; "
+            f"position size updated."
+        )
+
+        return get_position_level(inscode)
 
     decision = get_decision(inscode)
 

@@ -843,6 +843,18 @@ async def sell_command(update, context):
                 (new_qty, inscode),
             )
 
+            # فروش جزئی؛ سطوح مدیریت موقعیت حفظ می‌شوند،
+            # اما تعداد فعلی پوزیشن باید با portfolio هماهنگ باشد.
+            conn.execute(
+                """
+                UPDATE position_levels
+                SET entry_quantity = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE inscode = ?
+                """,
+                (new_qty, inscode),
+            )
+
         conn.execute(
             """
             INSERT INTO portfolio_transactions (

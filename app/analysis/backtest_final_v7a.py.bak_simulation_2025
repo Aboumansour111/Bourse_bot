@@ -623,7 +623,6 @@ def simulate_portfolio(candidates, data):
         date
         for item in data.values()
         for date in item["dates"]
-        if 20250101 <= date <= 20261231
     })
 
     price_map = build_price_map(data)

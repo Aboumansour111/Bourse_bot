@@ -453,11 +453,6 @@ def generate_candidates(data, breadth):
                 continue
 
             entry_date = dates[entry_index]
-
-            # Evaluate only trades entered during 2025 and 2026.
-            if entry_date < 20250101 or entry_date > 20261231:
-                continue
-
             entry = closes[entry_index]
 
             atr14 = signal["atr"]
@@ -623,7 +618,6 @@ def simulate_portfolio(candidates, data):
         date
         for item in data.values()
         for date in item["dates"]
-        if 20250101 <= date <= 20261231
     })
 
     price_map = build_price_map(data)

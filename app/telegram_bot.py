@@ -3,6 +3,7 @@ import sqlite3
 import requests
 
 from dotenv import load_dotenv
+from position_manager import initialize_position_after_buy
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,

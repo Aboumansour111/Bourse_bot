@@ -45,6 +45,10 @@ echo "[8/8] Building top picks..."
 "$PYTHON" app/analysis/top_picks.py
 
 echo
+echo "[9/9] Checking portfolio positions..."
+"$PYTHON" app/position_manager.py
+
+echo
 echo "========================================"
 echo " MARKET CYCLE COMPLETE"
 echo " $(date '+%Y-%m-%d %H:%M:%S')"

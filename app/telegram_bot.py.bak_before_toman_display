@@ -245,9 +245,9 @@ async def signals(update, context):
                 f"قیمت مرجع: {format_price(row['close_price'])}",
                 f"قیمت آخرین معامله: "
                 f"{format_price(get_current_price(row['inscode']))}",
-                f"مبلغ پیشنهادی: {format_price(row['allocation'] / 10)} تومان",
+                f"مبلغ پیشنهادی: {format_price(row['allocation'])}",
                 f"تعداد پیشنهادی: {row['quantity']:,}",
-                f"ارزش خرید: {format_price(row['position_value'] / 10)} تومان",
+                f"ارزش خرید: {format_price(row['position_value'])}",
                 f"حد ضرر: {format_price(row['stop_loss'])}",
                 f"هدف ۱: {format_price(row['target1'])}",
                 f"هدف ۲: {format_price(row['target2'])}",

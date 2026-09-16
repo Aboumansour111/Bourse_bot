@@ -153,7 +153,8 @@ def main():
             [
                 "max_drawdown_pct",
                 "max_dd_pct",
-                "max_dd",
+                        "max_dd",
+                "dd",
             ],
             0.0,
         )
@@ -162,7 +163,8 @@ def main():
             result,
             [
                 "win_rate_pct",
-                "win_rate",
+                        "win_rate",
+                "win",
             ],
             0.0,
         )

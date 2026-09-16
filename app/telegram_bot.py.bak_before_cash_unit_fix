@@ -453,12 +453,12 @@ async def portfolio(update, context):
     if not rows:
         await update.message.reply_text(
             f"پرتفوی خالی است.\n"
-            f"نقد: {cash / 10:,.0f} تومان"
+            f"نقد: {cash:,.0f}"
         )
         return
 
     lines = [
-        f"نقد: {cash / 10:,.0f} تومان",
+        f"نقد: {cash:,.0f}",
         "",
         "پرتفوی:"
     ]
@@ -482,7 +482,7 @@ async def portfolio(update, context):
 
     lines.extend([
         "",
-        f"ارزش کل تقریبی: {total_value / 10:,.0f} تومان",
+        f"ارزش کل تقریبی: {total_value:,.0f}",
     ])
 
     await update.message.reply_text(
@@ -501,7 +501,7 @@ async def cash(update, context):
             if millions < 0:
                 raise ValueError
 
-            amount = millions * 10_000_000
+            amount = millions * 1_000_000
 
             conn = get_db()
 
@@ -526,7 +526,7 @@ async def cash(update, context):
 
             await update.message.reply_text(
                 f"موجودی نقد ثبت شد: {millions:g} میلیون تومان\n"
-                f"معادل: {amount / 10:,.0f} تومان"
+                f"معادل: {amount:,.0f} تومان"
             )
             return
 
@@ -548,11 +548,11 @@ async def cash(update, context):
     conn.close()
 
     amount = float(row["amount"]) if row else 0.0
-    millions = amount / 10_000_000
+    millions = amount / 1_000_000
 
     await update.message.reply_text(
         f"موجودی نقد: {millions:g} میلیون تومان\n"
-        f"معادل: {amount / 10:,.0f} تومان\n\n"
+        f"معادل: {amount:,.0f} تومان\n\n"
         "برای تغییر:\n"
         "/cash مقدار-به-میلیون"
     )

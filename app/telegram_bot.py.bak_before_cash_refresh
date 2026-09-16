@@ -524,29 +524,9 @@ async def cash(update, context):
             conn.commit()
             conn.close()
 
-            # بعد از تغییر موجودی، پیشنهادهای خرید را
-            # بلافاصله با سرمایه جدید محاسبه کن.
-            try:
-                import subprocess
-
-                subprocess.run(
-                    [
-                        "/opt/bourse-bot/.venv/bin/python",
-                        "/opt/bourse-bot/app/analysis/top_picks.py",
-                    ],
-                    cwd="/opt/bourse-bot",
-                    check=True,
-                    timeout=30,
-                )
-            except Exception as exc:
-                print(
-                    f"[cash] top_picks refresh failed: {exc}"
-                )
-
             await update.message.reply_text(
                 f"موجودی نقد ثبت شد: {millions:g} میلیون تومان\n"
-                f"معادل: {amount / 10:,.0f} تومان\n"
-                f"پیشنهادهای خرید نیز به‌روزرسانی شدند."
+                f"معادل: {amount / 10:,.0f} تومان"
             )
             return
 

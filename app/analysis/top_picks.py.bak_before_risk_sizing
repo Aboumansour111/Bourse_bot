@@ -3,10 +3,7 @@ import sqlite3
 DB_PATH = "/opt/bourse-bot/data/bourse.db"
 
 MAX_PICKS = 3
-
-# مدیریت ریسک مطابق منطق بک‌تست
-RISK_PER_TRADE = 0.01
-MAX_POSITION_WEIGHT = 0.20
+RESERVE_RATIO = 0.20
 
 
 def main():
@@ -33,7 +30,7 @@ def main():
     )
 
     # قیمت مرجع از entry_signals می‌آید.
-    # قیمت فعلی مستقیماً از آخرین last_price موجود
+    # قیمت اکنون مستقیماً از آخرین last_price موجود
     # در daily_prices گرفته می‌شود.
     candidates = conn.execute("""
         SELECT
@@ -95,10 +92,9 @@ def main():
         print("No BUY_NOW candidates.")
         return
 
-    # ---------------------------------------------------------
-    # انتخاب 3 سهم برتر
-    # ---------------------------------------------------------
+    investable = cash * (1 - RESERVE_RATIO)
 
+    # امتیازدهی وزن‌دار بر اساس کیفیت ورود و ریسک
     weighted = []
 
     for row in candidates:
@@ -121,93 +117,49 @@ def main():
 
     selected = weighted[:MAX_PICKS]
 
-    # ---------------------------------------------------------
-    # Risk-based position sizing
-    #
-    # حداکثر ریسک هر معامله = 1% سرمایه
-    # حداکثر ارزش هر موقعیت = 20% سرمایه
-    # ---------------------------------------------------------
+    total_weight = sum(
+        item[1] for item in selected
+    )
 
-    risk_budget = cash * RISK_PER_TRADE
-    max_position_value = cash * MAX_POSITION_WEIGHT
+    if total_weight <= 0:
+        conn.close()
+        print("Invalid weights.")
+        return
 
     print("Cash:", f"{cash:,.0f}")
-    print("Risk budget / trade:", f"{risk_budget:,.0f}")
-    print(
-        "Max position value:",
-        f"{max_position_value:,.0f}"
-    )
+    print("Reserve:", f"{cash * RESERVE_RATIO:,.0f}")
+    print("Investable:", f"{investable:,.0f}")
     print("Market:", market_state)
     print()
 
-    rank = 0
-
-    for row, weighted_score in selected:
-        # قیمت پایانی که سیگنال بر اساس آن ساخته شده
+    for rank, (row, weighted_score) in enumerate(
+        selected, 1
+    ):
+        # قیمت مرجع = قیمت پایانی که سیگنال بر اساس آن ساخته شده
         close_price_val = float(row["close_price"] or 0)
 
-        # آخرین قیمت معامله‌شده
+        # قیمت اکنون = آخرین معامله ثبت‌شده در daily_prices
         last_price_val = float(row["last_price"] or 0)
 
+        # برای محاسبه تعداد سهم، اولویت با قیمت اکنون است.
+        # اگر قیمت اکنون موجود نباشد، قیمت مرجع استفاده می‌شود.
         price = (
             last_price_val
             if last_price_val > 0
             else close_price_val
         )
 
-        stop_loss = float(row["stop_loss"] or 0)
-
         if price <= 0:
-            print(
-                f"SKIP {row['symbol']}: invalid price."
-            )
             continue
 
-        # برای Risk Sizing باید Stop معتبر باشد.
-        if stop_loss <= 0 or stop_loss >= price:
-            print(
-                f"SKIP {row['symbol']}: "
-                f"invalid stop ({stop_loss:,.0f}) "
-                f"for price ({price:,.0f})."
-            )
-            continue
-
-        # فاصله استاپ به صورت درصدی
-        stop_distance = (
-            price - stop_loss
-        ) / price
-
-        if stop_distance <= 0:
-            print(
-                f"SKIP {row['symbol']}: "
-                "invalid stop distance."
-            )
-            continue
-
-        # مقدار سرمایه‌ای که با این فاصله استاپ،
-        # حداکثر 1% سرمایه را در معرض ریسک قرار می‌دهد.
-        risk_based_allocation = (
-            risk_budget / stop_distance
-        )
-
-        # سقف مطلق هر موقعیت = 20% سرمایه
-        allocation = min(
-            risk_based_allocation,
-            max_position_value,
+        allocation = (
+            investable
+            * weighted_score
+            / total_weight
         )
 
         quantity = int(allocation // price)
-
-        if quantity <= 0:
-            print(
-                f"SKIP {row['symbol']}: "
-                "calculated quantity is zero."
-            )
-            continue
-
         position_value = quantity * price
-
-        rank += 1
 
         conn.execute("""
             INSERT INTO top_picks (
@@ -235,7 +187,7 @@ def main():
             row["risk_level"],
             close_price_val,
             last_price_val,
-            stop_loss,
+            row["stop_loss"],
             row["target1"],
             row["target2"],
             allocation,
@@ -244,35 +196,20 @@ def main():
             market_state,
         ))
 
-        actual_risk = (
-            position_value * stop_distance
-        )
-
         print(
             f"{rank}. {row['symbol']} | "
             f"Quality={row['entry_quality']:.1f} | "
             f"Risk={row['risk_level']} | "
-            f"StopDist={stop_distance * 100:.2f}%"
-        )
-
-        print(
-            f"   Price(Live)={price:,.0f} | "
-            f"Close={close_price_val:,.0f} | "
-            f"Stop={stop_loss:,.0f}"
-        )
-
-        print(
-            f"   Allocation={allocation:,.0f} | "
+            f"Allocation={allocation:,.0f} | "
             f"Qty={quantity} | "
             f"Value={position_value:,.0f}"
         )
 
         print(
-            f"   ActualRisk={actual_risk:,.0f}"
-        )
-
-        print(
-            f"   T1={float(row['target1'] or 0):,.0f} | "
+            f"   Price(Live)={price:,.0f} | "
+            f"Close={close_price_val:,.0f} | "
+            f"Stop={float(row['stop_loss'] or 0):,.0f} | "
+            f"T1={float(row['target1'] or 0):,.0f} | "
             f"T2={float(row['target2'] or 0):,.0f}"
         )
 
@@ -280,10 +217,7 @@ def main():
     conn.close()
 
     print()
-    print(
-        f"Top Picks complete. "
-        f"Selected={rank}"
-    )
+    print("Top Picks complete.")
 
 
 if __name__ == "__main__":

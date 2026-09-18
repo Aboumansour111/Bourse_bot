@@ -1,0 +1,457 @@
+import sqlite3
+
+DB_PATH = "/opt/bourse-bot/data/bourse.db"
+
+
+def clamp(value, low=0.0, high=100.0):
+    return max(low, min(high, value))
+
+
+def get_decision(score, market_state, held, rsi, macd_hist, trend_score):
+    score = float(score or 0)
+
+    # ---------------------------------------
+    # اگر سهم را داریم: تصمیم مدیریت موقعیت
+    # ---------------------------------------
+    if held:
+        if score >= 85 and trend_score >= 3:
+            return "ADD"
+
+        if score >= 60:
+            return "HOLD"
+
+        if score >= 45:
+            return "REDUCE"
+
+        return "EXIT"
+
+    # ---------------------------------------
+    # اگر سهم را نداریم: تصمیم ورود
+    # ---------------------------------------
+    if market_state == "BEARISH":
+        # در بازار خیلی ضعیف فقط ستاپ‌های خیلی قوی
+        # اجازه BUY می‌گیرند.
+        if (
+            score >= 90
+            and trend_score >= 3
+            and rsi is not None
+            and rsi < 72
+            and macd_hist is not None
+            and macd_hist > 0
+        ):
+            return "BUY"
+
+        if score >= 75:
+            return "WATCH"
+
+        return "AVOID"
+
+    if market_state == "NEGATIVE":
+        if (
+            score >= 88
+            and trend_score >= 3
+            and rsi is not None
+            and rsi < 75
+            and macd_hist is not None
+            and macd_hist > 0
+        ):
+            return "BUY"
+
+        if score >= 72:
+            return "WATCH"
+
+        return "AVOID"
+
+    # بازار خنثی / مثبت
+    if score >= 85:
+        return "BUY"
+
+    if score >= 72:
+        return "WATCH"
+
+    return "AVOID"
+
+
+def risk_level(score, rsi, atr_pct, market_state):
+    risk_points = 0
+
+    if market_state == "BEARISH":
+        risk_points += 2
+    elif market_state == "NEGATIVE":
+        risk_points += 1
+
+    if rsi is not None:
+        if rsi >= 85:
+            risk_points += 3
+        elif rsi >= 75:
+            risk_points += 2
+        elif rsi >= 70:
+            risk_points += 1
+
+    if atr_pct is not None:
+        if atr_pct >= 8:
+            risk_points += 3
+        elif atr_pct >= 5:
+            risk_points += 2
+        elif atr_pct >= 3:
+            risk_points += 1
+
+    if score >= 90:
+        base = 0
+    elif score >= 80:
+        base = 1
+    elif score >= 70:
+        base = 2
+    else:
+        base = 3
+
+    risk_points += base
+
+    if risk_points <= 2:
+        return "LOW"
+
+    if risk_points <= 5:
+        return "MEDIUM"
+
+    return "HIGH"
+
+
+def calculate_levels(action, close_price, atr14):
+    if close_price is None or close_price <= 0:
+        return None, None, None
+
+    if atr14 is None or atr14 <= 0:
+        return None, None, None
+
+    # برای BUY/ADD:
+    # حد ضرر اولیه = 1.5 ATR زیر قیمت مرجع
+    # اهداف = 2 ATR و 3.5 ATR بالاتر
+    if action in ("BUY", "ADD"):
+        stop = close_price - (1.5 * atr14)
+        target1 = close_price + (2.0 * atr14)
+        target2 = close_price + (3.5 * atr14)
+
+        if stop < 0:
+            stop = 0
+
+        return stop, target1, target2
+
+    return None, None, None
+
+
+def main():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    # جدول خروجی تصمیم نهایی
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS decision_results (
+            inscode INTEGER PRIMARY KEY,
+            symbol TEXT,
+            trade_date INTEGER,
+            score REAL,
+            action TEXT,
+            market_state TEXT,
+            risk_level TEXT,
+            close_price REAL,
+            atr14 REAL,
+            atr_percent REAL,
+            rsi14 REAL,
+            macd_hist REAL,
+            trend_score INTEGER,
+            volume_ratio REAL,
+            buyer_power REAL,
+            real_flow_ratio REAL,
+            stop_loss REAL,
+            target1 REAL,
+            target2 REAL,
+            reason TEXT,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    market = conn.execute("""
+        SELECT
+            market_state,
+            breadth
+        FROM market_context
+        ORDER BY trade_date DESC
+        LIMIT 1
+    """).fetchone()
+
+    if not market:
+        conn.close()
+        raise RuntimeError(
+            "Market context not found. "
+            "Run market_context.py first."
+        )
+
+    market_state = market["market_state"]
+
+    rows = conn.execute("""
+        SELECT
+            s.inscode,
+            s.symbol,
+
+            fr.final_score,
+            fr.decision,
+
+            sr.trade_date,
+            sr.rsi14,
+            sr.macd_hist,
+            sr.volume_ratio,
+            sr.buyer_power,
+            sr.real_flow_ratio,
+            sr.reason,
+
+            ta.close,
+            ta.atr14,
+            ta.trend_score,
+
+            COALESCE(p.quantity, 0) AS quantity
+
+        FROM final_ranking fr
+
+        JOIN symbols s
+            ON s.inscode = fr.inscode
+
+        JOIN scoring_results sr
+            ON sr.inscode = fr.inscode
+
+        JOIN technical_analysis ta
+            ON ta.inscode = fr.inscode
+
+        LEFT JOIN portfolio p
+            ON p.inscode = fr.inscode
+
+        WHERE s.active = 1
+
+        ORDER BY fr.final_score DESC
+    """).fetchall()
+
+    print("Symbols:", len(rows))
+    print("Market:", market_state)
+
+    conn.execute("DELETE FROM decision_results")
+
+    results = []
+
+    for row in rows:
+        score = float(row["final_score"] or 0)
+        close_price = (
+            float(row["close"])
+            if row["close"] is not None
+            else None
+        )
+        atr14 = (
+            float(row["atr14"])
+            if row["atr14"] is not None
+            else None
+        )
+
+        atr_percent = None
+
+        if (
+            close_price is not None
+            and close_price > 0
+            and atr14 is not None
+        ):
+            atr_percent = (atr14 / close_price) * 100
+
+        held = int(row["quantity"] or 0) > 0
+
+        action = get_decision(
+            score=score,
+            market_state=market_state,
+            held=held,
+            rsi=row["rsi14"],
+            macd_hist=row["macd_hist"],
+            trend_score=int(row["trend_score"] or 0),
+        )
+
+        risk = risk_level(
+            score=score,
+            rsi=row["rsi14"],
+            atr_pct=atr_percent,
+            market_state=market_state,
+        )
+
+        stop_loss, target1, target2 = calculate_levels(
+            action,
+            close_price,
+            atr14,
+        )
+
+        reasons = []
+
+        if row["reason"]:
+            reasons.append(row["reason"])
+
+        if held:
+            reasons.append("در پرتفوی موجود است")
+        else:
+            reasons.append("در پرتفوی موجود نیست")
+
+        if market_state == "BEARISH":
+            reasons.append("بازار کلی نزولی")
+
+        if risk == "HIGH":
+            reasons.append("ریسک بالا")
+        elif risk == "MEDIUM":
+            reasons.append("ریسک متوسط")
+
+        if action == "WATCH":
+            reasons.append("فعلاً ورود تأیید نشده")
+
+        reason = "، ".join(
+            [x for x in reasons if x]
+        )
+
+        conn.execute("""
+            INSERT INTO decision_results (
+                inscode,
+                symbol,
+                trade_date,
+                score,
+                action,
+                market_state,
+                risk_level,
+                close_price,
+                atr14,
+                atr_percent,
+                rsi14,
+                macd_hist,
+                trend_score,
+                volume_ratio,
+                buyer_power,
+                real_flow_ratio,
+                stop_loss,
+                target1,
+                target2,
+                reason
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            row["inscode"],
+            row["symbol"],
+            row["trade_date"],
+            score,
+            action,
+            market_state,
+            risk,
+            close_price,
+            atr14,
+            atr_percent,
+            row["rsi14"],
+            row["macd_hist"],
+            row["trend_score"],
+            row["volume_ratio"],
+            row["buyer_power"],
+            row["real_flow_ratio"],
+            stop_loss,
+            target1,
+            target2,
+            reason,
+        ))
+
+        results.append({
+            "symbol": row["symbol"],
+            "score": score,
+            "action": action,
+            "risk": risk,
+            "close": close_price,
+            "stop": stop_loss,
+            "target1": target1,
+            "target2": target2,
+            "held": held,
+        })
+
+    conn.commit()
+
+    # جدول signals را هم با تصمیم نهایی هماهنگ می‌کنیم.
+    conn.execute("DELETE FROM signals")
+
+    for item in results:
+        inscode = conn.execute(
+            """
+            SELECT inscode
+            FROM decision_results
+            WHERE symbol = ?
+            LIMIT 1
+            """,
+            (item["symbol"],),
+        ).fetchone()
+
+        if not inscode:
+            continue
+
+        conn.execute("""
+            INSERT INTO signals (
+                inscode,
+                decision,
+                score,
+                reason
+            )
+            VALUES (?, ?, ?, ?)
+        """, (
+            inscode["inscode"],
+            item["action"],
+            item["score"],
+            "",
+        ))
+
+    conn.commit()
+
+    counts = {}
+
+    for item in results:
+        counts[item["action"]] = (
+            counts.get(item["action"], 0) + 1
+        )
+
+    print()
+    print("Decision engine complete")
+
+    for action in (
+        "BUY",
+        "ADD",
+        "HOLD",
+        "WATCH",
+        "REDUCE",
+        "EXIT",
+        "AVOID",
+    ):
+        print(
+            f"{action}: {counts.get(action, 0)}"
+        )
+
+    print()
+    print("TOP ACTIONABLE")
+
+    actionable = [
+        x for x in results
+        if x["action"] in ("BUY", "ADD")
+    ]
+
+    actionable.sort(
+        key=lambda x: x["score"],
+        reverse=True,
+    )
+
+    for index, item in enumerate(
+        actionable[:20], 1
+    ):
+        print(
+            f"{index}. "
+            f"{item['symbol']} | "
+            f"{item['score']:.1f} | "
+            f"{item['action']} | "
+            f"Risk={item['risk']} | "
+            f"Price={item['close']}"
+        )
+
+    conn.close()
+
+
+if __name__ == "__main__":
+    main()

@@ -123,13 +123,13 @@ def calculate_levels(action, close_price, atr14):
     if atr14 is None or atr14 <= 0:
         return None, None, None
 
-    # Production strategy aligned with validated backtest:
-    # Stop Loss = 1.0 ATR
-    # Target = 3.5 ATR
+    # برای BUY/ADD:
+    # حد ضرر اولیه = 1.5 ATR زیر قیمت مرجع
+    # اهداف = 2 ATR و 3.5 ATR بالاتر
     if action in ("BUY", "ADD"):
-        stop = close_price - (1.0 * atr14)
-        target1 = close_price + (3.5 * atr14)
-        target2 = None
+        stop = close_price - (1.5 * atr14)
+        target1 = close_price + (2.0 * atr14)
+        target2 = close_price + (3.5 * atr14)
 
         if stop < 0:
             stop = 0

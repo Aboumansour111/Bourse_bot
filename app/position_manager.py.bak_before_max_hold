@@ -9,8 +9,6 @@ from dotenv import load_dotenv
 DB_PATH = "/opt/bourse-bot/data/bourse.db"
 GATEWAY_URL = "http://127.0.0.1:18080"
 
-MAX_HOLD_TRADING_DAYS = 10
-
 load_dotenv("/opt/bourse-bot/.env")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -258,83 +256,6 @@ def initialize_position_after_buy(
     return get_position_level(inscode)
 
 
-def get_entry_trade_date(inscode):
-    """
-    آخرین تاریخ خریدی که هنوز بخشی از آن پوزیشن باز است.
-    برای MAX_HOLD_TRADING_DAYS استفاده می‌شود.
-    """
-    conn = get_conn()
-
-    rows = conn.execute(
-        """
-        SELECT side, quantity, trade_date
-        FROM portfolio_transactions
-        WHERE inscode = ?
-        ORDER BY id ASC
-        """,
-        (int(inscode),),
-    ).fetchall()
-
-    conn.close()
-
-    net_quantity = 0
-    last_buy_date = None
-
-    for row in rows:
-        side = str(row["side"]).upper()
-        quantity = int(row["quantity"] or 0)
-        trade_date = int(row["trade_date"] or 0)
-
-        if side == "BUY":
-            net_quantity += quantity
-            if quantity > 0:
-                last_buy_date = trade_date
-
-        elif side == "SELL":
-            net_quantity -= quantity
-
-    if net_quantity <= 0:
-        return None
-
-    return last_buy_date
-
-
-def get_trading_days_since(inscode, entry_trade_date):
-    """
-    تعداد روزهای معاملاتی سپری‌شده از تاریخ ورود.
-    فقط تاریخ‌هایی که برای همان نماد OHLCV معتبر دارند شمرده می‌شوند.
-    """
-    if entry_trade_date is None:
-        return None
-
-    conn = get_conn()
-
-    row = conn.execute(
-        """
-        SELECT COUNT(DISTINCT trade_date)
-        FROM daily_prices
-        WHERE inscode = ?
-          AND trade_date > ?
-          AND last_price > 0
-          AND close_price > 0
-          AND high_price > 0
-          AND low_price > 0
-          AND volume > 0
-          AND high_price >= low_price
-          AND low_price <= close_price
-          AND close_price <= high_price
-        """,
-        (
-            int(inscode),
-            int(entry_trade_date),
-        ),
-    ).fetchone()
-
-    conn.close()
-
-    return int(row[0] or 0)
-
-
 def determine_state(price, levels, decision, previous_state=None):
     stop_loss = levels["stop_loss"]
     target1 = levels["target1"]
@@ -395,7 +316,6 @@ def state_label(state):
         "TARGET2": "هدف دوم",
         "EXIT": "فروش کامل",
         "STOP_LOSS": "حد ضرر",
-        "TIME_EXIT": "پایان حداکثر زمان نگهداری",
     }.get(state, state)
 
 
@@ -407,7 +327,6 @@ def action_text(state):
         "TARGET2": "بررسی فروش بخش عمده/کامل موقعیت",
         "EXIT": "فروش کامل سهم",
         "STOP_LOSS": "فروش به دلیل شکست حد ضرر",
-        "TIME_EXIT": "فروش به دلیل پایان ۱۰ روز معاملاتی",
     }.get(state, "بررسی وضعیت")
 
 
@@ -548,27 +467,12 @@ def process_position(
 
     previous_state = levels["last_state"]
 
-    # Maximum holding period: 10 trading days.
-    # Existing STOP/TARGET/EXIT logic still has priority.
-    entry_trade_date = get_entry_trade_date(inscode)
-    holding_days = get_trading_days_since(
-        inscode,
-        entry_trade_date,
-    )
-
     state = determine_state(
         price,
         levels,
         decision,
         previous_state,
     )
-
-    if (
-        holding_days is not None
-        and holding_days >= MAX_HOLD_TRADING_DAYS
-        and state in ("HOLD", "REDUCE")
-    ):
-        state = "TIME_EXIT"
 
     print()
     print("=" * 60)
@@ -578,8 +482,6 @@ def process_position(
     print(f"Stop       : {format_price(levels['stop_loss'])}")
     print(f"Target 1   : {format_price(levels['target1'])}")
     print(f"Target 2   : {format_price(levels['target2'])}")
-    print(f"Entry date : {entry_trade_date}")
-    print(f"Hold days  : {holding_days}")
     print(f"Decision   : {decision['action']}")
     print(f"State      : {previous_state} -> {state}")
     print("=" * 60)

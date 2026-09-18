@@ -288,9 +288,16 @@ def load_data(conn):
             FROM daily_prices
             WHERE inscode = ?
               AND close_price IS NOT NULL
+              AND close_price > 0
               AND high_price IS NOT NULL
+              AND high_price > 0
               AND low_price IS NOT NULL
+              AND low_price > 0
               AND volume IS NOT NULL
+              AND volume > 0
+              AND high_price >= low_price
+              AND close_price >= low_price
+              AND close_price <= high_price
             ORDER BY trade_date ASC
         """, (inscode,)).fetchall()
 

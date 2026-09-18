@@ -116,21 +116,11 @@ def atr(highs, lows, closes, period=14):
         ):
             continue
 
-        # If the previous OHLC observation is invalid/missing,
-        # do not use the stale previous close in True Range.
-        if (
-            highs[i - 1] <= 0
-            or lows[i - 1] <= 0
-            or highs[i - 1] < lows[i - 1]
-            or closes[i - 1] <= 0
-        ):
-            tr = highs[i] - lows[i]
-        else:
-            tr = max(
-                highs[i] - lows[i],
-                abs(highs[i] - closes[i - 1]),
-                abs(lows[i] - closes[i - 1]),
-            )
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
 
         trs.append(tr)
 
@@ -140,9 +130,12 @@ def atr(highs, lows, closes, period=14):
     value = sum(trs[:period]) / period
 
     for tr in trs[period:]:
-        value = ((value * (period - 1)) + tr) / period
+        value = (
+            (value * (period - 1)) + tr
+        ) / period
 
     return value
+
 
 def volume_ratio(volumes, period=20):
     valid = [
@@ -288,9 +281,16 @@ def load_data(conn):
             FROM daily_prices
             WHERE inscode = ?
               AND close_price IS NOT NULL
+              AND close_price > 0
               AND high_price IS NOT NULL
+              AND high_price > 0
               AND low_price IS NOT NULL
+              AND low_price > 0
               AND volume IS NOT NULL
+              AND volume > 0
+              AND high_price >= low_price
+              AND close_price >= low_price
+              AND close_price <= high_price
             ORDER BY trade_date ASC
         """, (inscode,)).fetchall()
 

@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from collections import defaultdict
 from statistics import mean
@@ -400,7 +401,7 @@ def generate_candidates(data, breadth):
             entry_date = dates[entry_index]
 
             # Evaluate only trades entered during 2025 and 2026.
-            if entry_date < 20250101 or entry_date > 20261231:
+            if entry_date < int(os.environ.get("BACKTEST_START", "20250101")) or entry_date > int(os.environ.get("BACKTEST_END", "20261231")):
                 continue
 
             entry = closes[entry_index]

@@ -902,6 +902,28 @@ def print_results(
         print(f"{reason}: {count}")
 
     print()
+    print("SMART EXIT DETAILS:")
+
+    smart_trades = [
+        trade for trade in trades
+        if trade["reason"] == "SMART_EXIT"
+    ]
+
+    if smart_trades:
+        for trade in smart_trades:
+            print(
+                f"{trade['symbol']} | "
+                f"{trade['entry_date']} -> "
+                f"{trade['exit_date']} | "
+                f"entry={trade['entry']:.2f} | "
+                f"exit={trade['exit']:.2f} | "
+                f"return={trade['return_pct']:.2f}% | "
+                f"qty={trade['quantity']}"
+            )
+    else:
+        print("No SMART_EXIT trades.")
+
+    print()
     print("Best 10:")
 
     for trade in sorted(

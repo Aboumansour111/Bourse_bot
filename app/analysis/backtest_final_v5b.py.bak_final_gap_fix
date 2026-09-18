@@ -101,25 +101,29 @@ def macd_histogram(values):
     return valid[-1] - signal[-1]
 
 
-def atr(highs, lows, closes, gap_before=None, period=14):
+def atr(highs, lows, closes, period=14):
     if len(closes) <= period:
         return None
 
-    if gap_before is None:
-        gap_before = [False] * len(closes)
-
-    true_ranges = []
+    trs = []
 
     for i in range(1, len(closes)):
         if (
             highs[i] <= 0
             or lows[i] <= 0
-            or closes[i] <= 0
             or highs[i] < lows[i]
+            or closes[i - 1] <= 0
         ):
             continue
 
-        if gap_before[i]:
+        # If the previous OHLC observation is invalid/missing,
+        # do not use the stale previous close in True Range.
+        if (
+            highs[i - 1] <= 0
+            or lows[i - 1] <= 0
+            or highs[i - 1] < lows[i - 1]
+            or closes[i - 1] <= 0
+        ):
             tr = highs[i] - lows[i]
         else:
             tr = max(
@@ -128,14 +132,14 @@ def atr(highs, lows, closes, gap_before=None, period=14):
                 abs(lows[i] - closes[i - 1]),
             )
 
-        true_ranges.append(tr)
+        trs.append(tr)
 
-    if len(true_ranges) < period:
+    if len(trs) < period:
         return None
 
-    value = sum(true_ranges[:period]) / period
+    value = sum(trs[:period]) / period
 
-    for tr in true_ranges[period:]:
+    for tr in trs[period:]:
         value = ((value * (period - 1)) + tr) / period
 
     return value
@@ -159,7 +163,7 @@ def volume_ratio(volumes, period=20):
     return recent[-1] / avg
 
 
-def technical_signal(closes, highs, lows, volumes, gap_before=None):
+def technical_signal(closes, highs, lows, volumes):
     if len(closes) < MIN_HISTORY:
         return None
 
@@ -180,7 +184,7 @@ def technical_signal(closes, highs, lows, volumes, gap_before=None):
 
     rsi14 = rsi(closes, 14)
     macd_hist = macd_histogram(closes)
-    atr14 = atr(highs, lows, closes, gap_before, 14)
+    atr14 = atr(highs, lows, closes, 14)
     vol_ratio = volume_ratio(volumes, 20)
 
     trend = 0
@@ -290,45 +294,64 @@ def load_data(conn):
             ORDER BY trade_date ASC
         """, (inscode,)).fetchall()
 
-        valid_rows = []
-        gap_before = []
-        had_invalid = False
-
-        for r in rows:
-            trade_date, close_price, high_price, low_price, volume = r
-
-            valid = (
-                close_price > 0
-                and high_price > 0
-                and low_price > 0
-                and volume > 0
-                and high_price >= low_price
-                and close_price >= low_price
-                and close_price <= high_price
-            )
-
-            if not valid:
-                had_invalid = True
-                continue
-
-            valid_rows.append(r)
-            gap_before.append(had_invalid)
-            had_invalid = False
-
-        if len(valid_rows) < MIN_HISTORY + 2:
+        if len(rows) < MIN_HISTORY + 2:
             continue
 
         data[inscode] = {
             "symbol": symbol,
-            "dates": [r[0] for r in valid_rows],
-            "closes": [float(r[1]) for r in valid_rows],
-            "highs": [float(r[2]) for r in valid_rows],
-            "lows": [float(r[3]) for r in valid_rows],
-            "volumes": [float(r[4]) for r in valid_rows],
-            "gap_before": gap_before,
+            "dates": [r[0] for r in rows],
+            "closes": [float(r[1]) for r in rows],
+            "highs": [float(r[2]) for r in rows],
+            "lows": [float(r[3]) for r in rows],
+            "volumes": [float(r[4]) for r in rows],
         }
 
     return data
+
+
+def build_breadth(data):
+    daily = defaultdict(dict)
+
+    for inscode, item in data.items():
+        dates = item["dates"]
+        closes = item["closes"]
+
+        previous = None
+
+        for date, close in zip(dates, closes):
+            if previous is None:
+                previous = close
+                continue
+
+            if close > previous:
+                state = 1
+            elif close < previous:
+                state = -1
+            else:
+                state = 0
+
+            daily[date][inscode] = state
+            previous = close
+
+    breadth = {}
+
+    for date, states in daily.items():
+        positive = sum(1 for x in states.values() if x > 0)
+        negative = sum(1 for x in states.values() if x < 0)
+        unchanged = sum(1 for x in states.values() if x == 0)
+
+        total = positive + negative + unchanged
+
+        if total:
+            breadth[date] = {
+                "positive": positive,
+                "negative": negative,
+                "unchanged": unchanged,
+                "breadth": positive / total,
+            }
+
+    return breadth
+
 
 def generate_candidates(data, breadth):
     candidates = []
@@ -351,7 +374,6 @@ def generate_candidates(data, breadth):
                 highs[:i + 1],
                 lows[:i + 1],
                 volumes[:i + 1],
-                data[inscode]["gap_before"][:i + 1],
             )
 
             if signal is None or not signal["eligible"]:

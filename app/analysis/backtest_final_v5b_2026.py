@@ -919,6 +919,92 @@ def print_results(
             f"qty={trade['quantity']}"
         )
 
+    print()
+    print("===== MONTHLY ROBUSTNESS =====")
+
+    monthly = defaultdict(list)
+
+    for trade in trades:
+        month = str(trade["entry_date"])[:6]
+        monthly[month].append(trade)
+
+    for month in sorted(monthly):
+        mt = monthly[month]
+        mw = [x for x in mt if x["pnl"] > 0]
+        ml = [x for x in mt if x["pnl"] <= 0]
+
+        gp = sum(x["pnl"] for x in mw)
+        gl = abs(sum(x["pnl"] for x in ml))
+
+        pf = (
+            gp / gl
+            if gl > 0
+            else float("inf")
+        )
+
+        wr = (
+            len(mw) / len(mt) * 100
+        )
+
+        pnl = sum(x["pnl"] for x in mt)
+
+        print(
+            f"{month}: "
+            f"trades={len(mt)} | "
+            f"win={wr:.1f}% | "
+            f"PF={pf:.2f} | "
+            f"P&L={pnl:,.0f}"
+        )
+
+    print()
+    print("===== SYMBOL CONCENTRATION =====")
+
+    by_symbol = defaultdict(list)
+
+    for trade in trades:
+        by_symbol[trade["symbol"]].append(trade)
+
+    symbol_rows = []
+
+    for symbol, st in by_symbol.items():
+        pnl = sum(x["pnl"] for x in st)
+        symbol_rows.append(
+            (
+                pnl,
+                symbol,
+                len(st),
+                sum(
+                    1
+                    for x in st
+                    if x["pnl"] > 0
+                ),
+            )
+        )
+
+    for pnl, symbol, count, wins in sorted(
+        symbol_rows,
+        reverse=True,
+    )[:15]:
+        print(
+            f"{symbol}: "
+            f"trades={count} | "
+            f"wins={wins} | "
+            f"P&L={pnl:,.0f}"
+        )
+
+    print()
+    print("===== WORST SYMBOLS =====")
+
+    for pnl, symbol, count, wins in sorted(
+        symbol_rows
+    )[:10]:
+        print(
+            f"{symbol}: "
+            f"trades={count} | "
+            f"wins={wins} | "
+            f"P&L={pnl:,.0f}"
+        )
+
 
 def main():
     conn = sqlite3.connect(DB_PATH)

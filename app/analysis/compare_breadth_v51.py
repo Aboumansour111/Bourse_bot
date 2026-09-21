@@ -54,6 +54,8 @@ def main():
     data = v5b.load_data(conn)
     breadth = v5b.build_breadth(data)
 
+    oos_v5b.BASE = oos_v5b.prepare_base(data)
+
     print("\n===== BREADTH COMPARISON =====")
     print("A = B=0.42 / S=2 / T=3.5 / H=10")
     print("B = B=0.46 / S=2 / T=3.5 / H=10")

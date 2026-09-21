@@ -1,7 +1,8 @@
 import sqlite3
+import csv
 from pathlib import Path
-from itertools import product
 from collections import defaultdict
+from itertools import product
 
 import app.analysis.backtest_final_v5b_2026 as v5b
 
@@ -14,329 +15,363 @@ STOP_ATR_VALUES = [1.25, 1.50, 1.75, 2.00]
 TARGET_ATR_VALUES = [2.50, 3.00, 3.50, 4.00]
 HOLD_VALUES = [7, 10, 12]
 
-ROUND_TRIP_COST = v5b.ROUND_TRIP_COST
-ENTRY_FEE = v5b.ENTRY_FEE
-EXIT_FEE = v5b.EXIT_FEE
 
-INITIAL_CAPITAL = v5b.INITIAL_CAPITAL
-RISK_PER_TRADE = v5b.RISK_PER_TRADE
-MAX_POSITION_WEIGHT = v5b.MAX_POSITION_WEIGHT
-MAX_CONCURRENT_POSITIONS = v5b.MAX_CONCURRENT_POSITIONS
-
-
-def build_base_candidates(data, breadth):
+def prepare_base(data):
     """
-    Generate candidates using the exact V5B technical logic,
-    but without stop/target/hold calculations.
-    """
-    all_dates = sorted(data["market"].keys())
+    Run the expensive technical_signal calculation only once.
 
+    Each item contains everything needed to generate candidates for
+    different breadth/stop/target/hold combinations.
+    """
+    base = []
+
+    total = len(data)
+
+    for n, (inscode, item) in enumerate(data.items(), 1):
+        dates = item["dates"]
+        closes = item["closes"]
+        highs = item["highs"]
+        lows = item["lows"]
+        volumes = item["volumes"]
+        gaps = item["gap_before"]
+
+        for i in range(v5b.MIN_HISTORY, len(dates) - 1):
+
+            signal = v5b.technical_signal(
+                closes[:i + 1],
+                highs[:i + 1],
+                lows[:i + 1],
+                volumes[:i + 1],
+                gaps[:i + 1],
+            )
+
+            if signal is None or not signal["eligible"]:
+                continue
+
+            signal_date = dates[i]
+
+            # Same entry-date restriction as the 2026 V5B backtest.
+            entry_index = i + 1
+
+            if entry_index >= len(dates):
+                continue
+
+            entry_date = dates[entry_index]
+
+            if entry_date < 20260101 or entry_date > 20261231:
+                continue
+
+            entry = closes[entry_index]
+            atr = signal["atr"]
+
+            if entry <= 0 or atr <= 0:
+                continue
+
+            base.append({
+                "symbol": item["symbol"],
+                "inscode": inscode,
+                "signal_date": signal_date,
+                "entry_date": entry_date,
+                "entry_index": entry_index,
+                "entry": entry,
+                "atr": atr,
+                "quality": signal["quality"],
+            })
+
+        if n % 50 == 0:
+            print(
+                f"Base signals [{n}/{total}] = {len(base)}",
+                flush=True,
+            )
+
+    return base
+
+
+def make_candidates(base, data, breadth_map, breadth_value,
+                    stop_atr, target_atr, max_hold):
+    """
+    Same V5B candidate/exit logic, parameterized.
+    """
     candidates = []
 
-    for date in all_dates:
-        market = data["market"].get(date)
-        if not market:
+    for b in base:
+        market = breadth_map.get(b["signal_date"])
+
+        if market is None:
             continue
 
-        if market["breadth"] < breadth:
+        if market["breadth"] < breadth_value:
             continue
 
-        daily = data["daily"].get(date, {})
+        item = data[b["inscode"]]
+        dates = item["dates"]
+        highs = item["highs"]
+        lows = item["lows"]
 
-        for symbol, row in daily.items():
-            tech = data["technical"].get(symbol, {}).get(date)
-            if not tech:
-                continue
+        entry_index = b["entry_index"]
+        entry = b["entry"]
+        atr = b["atr"]
 
-            signal = v5b.technical_signal(tech)
+        stop = entry - stop_atr * atr
+        target = entry + target_atr * atr
 
-            if not signal:
-                continue
+        if stop <= 0 or target <= entry:
+            continue
 
-            # Match original V5B eligibility.
-            if signal["quality"] < 75:
-                continue
+        last_index = min(
+            entry_index + max_hold,
+            len(dates) - 1,
+        )
 
-            if signal["trend_count"] < 4:
-                continue
+        exit_price = dates and item["closes"][last_index]
+        exit_date = dates[last_index]
+        exit_reason = "TIME"
 
-            if signal["rsi"] >= 75:
-                continue
+        for j in range(entry_index + 1, last_index + 1):
+            day_low = lows[j]
+            day_high = highs[j]
 
-            if signal["macd"] <= 0:
-                continue
+            hit_stop = day_low <= stop
+            hit_target = day_high >= target
 
-            vr = signal["volume_ratio"]
+            if hit_stop and hit_target:
+                exit_price = stop
+                exit_date = dates[j]
+                exit_reason = "STOP_AND_TARGET_SAME_DAY"
+                break
 
-            if not (1.2 <= vr <= 3.0):
-                continue
+            if hit_stop:
+                exit_price = stop
+                exit_date = dates[j]
+                exit_reason = "STOP"
+                break
 
-            if signal["atr"] <= 0:
-                continue
+            if hit_target:
+                exit_price = target
+                exit_date = dates[j]
+                exit_reason = "TARGET"
+                break
 
-            next_date = None
-            for d in all_dates:
-                if d > date:
-                    next_date = d
-                    break
-
-            if next_date is None:
-                continue
-
-            next_row = data["daily"].get(next_date, {}).get(symbol)
-
-            if not next_row:
-                continue
-
-            entry_price = next_row["close_price"]
-
-            if entry_price <= 0:
-                continue
-
-            candidates.append({
-                "entry_date": next_date,
-                "signal_date": date,
-                "symbol": symbol,
-                "entry_price": entry_price,
-                "atr": signal["atr"],
-                "quality": signal["quality"],
-                "breadth": market["breadth"],
-            })
+        candidates.append({
+            "symbol": b["symbol"],
+            "inscode": b["inscode"],
+            "signal_date": b["signal_date"],
+            "entry_date": b["entry_date"],
+            "exit_date": exit_date,
+            "entry": entry,
+            "exit": exit_price,
+            "stop": stop,
+            "target": target,
+            "return": (
+                (exit_price - entry) / entry
+                - v5b.ROUND_TRIP_COST
+            ) * 100,
+            "quality": b["quality"],
+            "reason": exit_reason,
+            "breadth": market["breadth"],
+        })
 
     return candidates
 
 
-def prepare_candidates(data):
+def simulate(candidates, data):
     """
-    Breadth only affects candidate eligibility.
-    Technical calculations are reused across all breadth levels.
+    Exact V5B portfolio simulation.
     """
-    cache = {}
+    candidates_by_date = defaultdict(list)
 
-    for breadth in BREADTH_VALUES:
-        print(f"Preparing candidates B={breadth:.2f}...", flush=True)
-        cache[breadth] = build_base_candidates(data, breadth)
-        print(
-            f"  candidates={len(cache[breadth])}",
-            flush=True
+    for trade in candidates:
+        candidates_by_date[trade["entry_date"]].append(trade)
+
+    for date in candidates_by_date:
+        candidates_by_date[date].sort(
+            key=lambda x: (-x["quality"], -x["breadth"])
         )
 
-    return cache
+    all_dates = sorted({
+        date
+        for item in data.values()
+        for date in item["dates"]
+        if 20260101 <= date <= 20261231
+    })
 
+    price_map = {}
 
-def simulate(data, candidates, stop_atr, target_atr, max_hold):
-    """
-    Portfolio simulation matching V5B portfolio logic.
-    """
-    all_dates = sorted(data["market"].keys())
+    for inscode, item in data.items():
+        for date, close in zip(item["dates"], item["closes"]):
+            price_map[(inscode, date)] = close
 
-    by_entry = defaultdict(list)
+    cash = v5b.INITIAL_CAPITAL
+    positions = []
+    completed = []
 
-    for c in candidates:
-        by_entry[c["entry_date"]].append(c)
-
-    equity = INITIAL_CAPITAL
-    cash = INITIAL_CAPITAL
-
-    positions = {}
-    trades = []
-
-    equity_curve = []
+    peak = cash
+    max_dd = 0.0
 
     for date in all_dates:
-        daily = data["daily"].get(date, {})
 
-        # ---------------------------------------------------------
-        # EXIT
-        # ---------------------------------------------------------
-        for symbol in list(positions.keys()):
-            pos = positions[symbol]
+        remaining = []
 
-            row = daily.get(symbol)
-            if not row:
-                continue
+        for pos in positions:
+            if pos["exit_date"] == date:
+                exit_value = pos["exit"] * pos["quantity"]
+                exit_fee = exit_value * v5b.EXIT_FEE
 
-            high = row["high_price"]
-            low = row["low_price"]
-            close = row["close_price"]
+                cash += exit_value - exit_fee
 
-            stop = pos["stop"]
-            target = pos["target"]
+                entry_value = pos["entry"] * pos["quantity"]
 
-            exit_price = None
-            reason = None
-
-            # Exact V5B behavior:
-            # If both happen on same day, STOP wins.
-            if low <= stop:
-                exit_price = stop
-                reason = "STOP"
-
-            elif high >= target:
-                exit_price = target
-                reason = "TARGET"
-
-            elif pos["hold_days"] >= max_hold:
-                exit_price = close
-                reason = "TIME"
-
-            if exit_price is None:
-                continue
-
-            gross = (exit_price - pos["entry_price"]) / pos["entry_price"]
-
-            net = gross - ROUND_TRIP_COST
-
-            pnl = pos["capital"] * net
-
-            cash += pos["capital"] + pnl
-
-            trades.append({
-                "symbol": symbol,
-                "entry_date": pos["entry_date"],
-                "exit_date": date,
-                "entry_price": pos["entry_price"],
-                "exit_price": exit_price,
-                "return": net,
-                "pnl": pnl,
-                "reason": reason,
-            })
-
-            del positions[symbol]
-
-        # ---------------------------------------------------------
-        # MARK OPEN POSITIONS
-        # ---------------------------------------------------------
-        open_value = 0.0
-
-        for symbol, pos in positions.items():
-            row = daily.get(symbol)
-
-            if row:
-                price = row["close_price"]
-                open_value += pos["capital"] * (
-                    price / pos["entry_price"]
+                pnl = (
+                    exit_value
+                    - entry_value
+                    - pos["entry_fee"]
+                    - exit_fee
                 )
 
-        equity = cash + open_value
-        equity_curve.append((date, equity))
+                pos["pnl"] = pnl
+                pos["return_pct"] = (
+                    pnl / (entry_value + pos["entry_fee"]) * 100
+                )
 
-        # ---------------------------------------------------------
-        # ENTRY
-        # ---------------------------------------------------------
-        todays = by_entry.get(date, [])
+                completed.append(pos)
+            else:
+                remaining.append(pos)
 
-        if todays:
-            # Exact V5B ordering.
-            todays = sorted(
-                todays,
-                key=lambda x: (
-                    x["quality"],
-                    x["breadth"],
-                ),
-                reverse=True,
+        positions = remaining
+
+        for candidate in candidates_by_date.get(date, []):
+
+            if len(positions) >= v5b.MAX_CONCURRENT_POSITIONS:
+                break
+
+            if any(
+                p["inscode"] == candidate["inscode"]
+                for p in positions
+            ):
+                continue
+
+            equity_before = cash
+
+            for p in positions:
+                current_price = price_map.get(
+                    (p["inscode"], date),
+                    p["entry"],
+                )
+
+                equity_before += current_price * p["quantity"]
+
+            risk_budget = equity_before * v5b.RISK_PER_TRADE
+
+            risk_per_share = (
+                candidate["entry"] - candidate["stop"]
             )
 
-            for c in todays:
-                symbol = c["symbol"]
+            if risk_per_share <= 0:
+                continue
 
-                if symbol in positions:
-                    continue
+            quantity_by_risk = risk_budget / risk_per_share
 
-                if len(positions) >= MAX_CONCURRENT_POSITIONS:
-                    break
+            max_value = (
+                equity_before * v5b.MAX_POSITION_WEIGHT
+            )
 
-                atr = c["atr"]
-                entry_price = c["entry_price"]
+            quantity_by_weight = (
+                max_value / candidate["entry"]
+            )
 
-                stop = entry_price - stop_atr * atr
-                target = entry_price + target_atr * atr
+            available = (
+                cash /
+                (candidate["entry"] * (1 + v5b.ENTRY_FEE))
+            )
 
-                risk_per_share = entry_price - stop
+            quantity = int(min(
+                quantity_by_risk,
+                quantity_by_weight,
+                available,
+            ))
 
-                if risk_per_share <= 0:
-                    continue
+            if quantity <= 0:
+                continue
 
-                risk_capital = equity * RISK_PER_TRADE
+            entry_value = candidate["entry"] * quantity
+            entry_fee = entry_value * v5b.ENTRY_FEE
+            total_cost = entry_value + entry_fee
 
-                capital = risk_capital / (
-                    risk_per_share / entry_price
-                )
+            if total_cost > cash:
+                continue
 
-                max_capital = equity * MAX_POSITION_WEIGHT
+            cash -= total_cost
 
-                capital = min(capital, max_capital, cash)
+            positions.append({
+                **candidate,
+                "quantity": quantity,
+                "entry_value": entry_value,
+                "entry_fee": entry_fee,
+                "pnl": None,
+                "return_pct": None,
+            })
 
-                if capital <= 0:
-                    continue
+        equity = cash
 
-                cash -= capital
+        for pos in positions:
+            current_price = price_map.get(
+                (pos["inscode"], date),
+                pos["entry"],
+            )
 
-                positions[symbol] = {
-                    "symbol": symbol,
-                    "entry_date": date,
-                    "entry_price": entry_price,
-                    "capital": capital,
-                    "stop": stop,
-                    "target": target,
-                    "hold_days": 0,
-                }
+            equity += current_price * pos["quantity"]
 
-        # Increment holding days after today's processing.
-        for pos in positions.values():
-            if pos["entry_date"] != date:
-                pos["hold_days"] += 1
+        peak = max(peak, equity)
 
-    # -------------------------------------------------------------
-    # CLOSE OPEN POSITIONS AT LAST TEST DATE
-    # -------------------------------------------------------------
-    final_date = all_dates[-1]
-    final_daily = data["daily"].get(final_date, {})
+        dd = (equity - peak) / peak * 100
+        max_dd = min(max_dd, dd)
 
-    for symbol in list(positions.keys()):
-        pos = positions[symbol]
-        row = final_daily.get(symbol)
+    last_date = all_dates[-1] if all_dates else None
 
-        if not row:
-            continue
+    for pos in positions:
+        last_price = price_map.get(
+            (pos["inscode"], last_date),
+            pos["entry"],
+        )
 
-        exit_price = row["close_price"]
+        exit_value = last_price * pos["quantity"]
+        exit_fee = exit_value * v5b.EXIT_FEE
 
-        gross = (
-            exit_price - pos["entry_price"]
-        ) / pos["entry_price"]
+        entry_value = pos["entry"] * pos["quantity"]
 
-        net = gross - ROUND_TRIP_COST
+        pnl = (
+            exit_value
+            - entry_value
+            - pos["entry_fee"]
+            - exit_fee
+        )
 
-        pnl = pos["capital"] * net
+        pos["pnl"] = pnl
+        pos["return_pct"] = (
+            pnl / (entry_value + pos["entry_fee"]) * 100
+        )
 
-        cash += pos["capital"] + pnl
+        cash += exit_value - exit_fee
+        completed.append(pos)
 
-        trades.append({
-            "symbol": symbol,
-            "entry_date": pos["entry_date"],
-            "exit_date": final_date,
-            "entry_price": pos["entry_price"],
-            "exit_price": exit_price,
-            "return": net,
-            "pnl": pnl,
-            "reason": "END",
-        })
+    return completed, cash, max_dd
 
-    final_equity = cash
 
-    if not trades:
+def metrics(completed, final_equity, max_dd):
+    trades = len(completed)
+
+    if trades == 0:
         return {
             "trades": 0,
             "return": 0.0,
             "win_rate": 0.0,
             "pf": 0.0,
-            "dd": 0.0,
-            "final": INITIAL_CAPITAL,
+            "dd": max_dd,
+            "final": final_equity,
         }
 
-    wins = [t["pnl"] for t in trades if t["pnl"] > 0]
-    losses = [t["pnl"] for t in trades if t["pnl"] < 0]
+    wins = [x["pnl"] for x in completed if x["pnl"] > 0]
+    losses = [x["pnl"] for x in completed if x["pnl"] < 0]
 
     gross_profit = sum(wins)
     gross_loss = abs(sum(losses))
@@ -347,34 +382,18 @@ def simulate(data, candidates, stop_atr, target_atr, max_hold):
         else 999.0
     )
 
-    win_rate = len(wins) / len(trades)
-
-    peak = INITIAL_CAPITAL
-    max_dd = 0.0
-
-    for _, eq in equity_curve:
-        peak = max(peak, eq)
-
-        if peak > 0:
-            dd = (eq - peak) / peak
-            max_dd = min(max_dd, dd)
-
-    total_return = (
-        final_equity / INITIAL_CAPITAL - 1
-    )
-
     return {
-        "trades": len(trades),
-        "return": total_return,
-        "win_rate": win_rate,
+        "trades": trades,
+        "return": final_equity / v5b.INITIAL_CAPITAL - 1,
+        "win_rate": len(wins) / trades,
         "pf": pf,
-        "dd": max_dd,
+        "dd": max_dd / 100.0,
         "final": final_equity,
     }
 
 
-def score_result(r):
-    score = (
+def score(r):
+    value = (
         r["return"]
         + r["pf"] * 4
         + r["win_rate"] * 0.05
@@ -382,86 +401,103 @@ def score_result(r):
     )
 
     if r["trades"] < 40:
-        score -= (40 - r["trades"]) * 0.20
+        value -= (40 - r["trades"]) * 0.20
 
-    return score
+    return value
 
 
 def main():
     print("Loading data...", flush=True)
 
     conn = sqlite3.connect(DB_PATH)
+
     try:
         data = v5b.load_data(conn)
     finally:
         conn.close()
 
     print(
-        f"Valid symbols: {len(data['symbols'])}",
-        flush=True
+        f"Valid symbols: {len(data)}",
+        flush=True,
     )
 
-    print("Preparing cached candidates...", flush=True)
+    print("Building breadth...", flush=True)
+    breadth_map = v5b.build_breadth(data)
 
-    candidate_cache = prepare_candidates(data)
+    print("Caching technical signals...", flush=True)
+    base = prepare_base(data)
 
-    combinations = list(
-        product(
-            BREADTH_VALUES,
-            STOP_ATR_VALUES,
-            TARGET_ATR_VALUES,
-            HOLD_VALUES,
-        )
+    print(
+        f"Base eligible entries: {len(base)}",
+        flush=True,
     )
+
+    combinations = list(product(
+        BREADTH_VALUES,
+        STOP_ATR_VALUES,
+        TARGET_ATR_VALUES,
+        HOLD_VALUES,
+    ))
 
     print(
         f"Testing {len(combinations)} combinations...",
-        flush=True
+        flush=True,
     )
 
     results = []
 
-    for i, (
+    for n, (
         breadth,
         stop_atr,
         target_atr,
-        hold,
+        max_hold,
     ) in enumerate(combinations, 1):
 
-        candidates = candidate_cache[breadth]
-
-        r = simulate(
+        candidates = make_candidates(
+            base,
             data,
-            candidates,
+            breadth_map,
+            breadth,
             stop_atr,
             target_atr,
-            hold,
+            max_hold,
         )
 
-        score = score_result(r)
+        completed, final_equity, max_dd = simulate(
+            candidates,
+            data,
+        )
 
-        result = {
+        r = metrics(
+            completed,
+            final_equity,
+            max_dd,
+        )
+
+        s = score(r)
+
+        row = {
             "breadth": breadth,
             "stop_atr": stop_atr,
             "target_atr": target_atr,
-            "hold": hold,
+            "hold": max_hold,
             "trades": r["trades"],
             "return": r["return"],
             "win_rate": r["win_rate"],
             "pf": r["pf"],
             "dd": r["dd"],
             "final": r["final"],
-            "score": score,
+            "score": s,
         }
 
-        results.append(result)
+        results.append(row)
 
         print(
-            f"[{i}/{len(combinations)}] "
+            f"[{n}/{len(combinations)}] "
             f"B={breadth:.2f} "
             f"S={stop_atr:.2f} "
             f"T={target_atr:.2f} "
-            f"H={hold} "
+            f"H={max_hold} "
             f"Trades={r['trades']} "
             f"Ret={r['return']:.2%} "
             f"PF={r['pf']:.2f} "
@@ -473,8 +509,6 @@ def main():
         key=lambda x: x["score"],
         reverse=True,
     )
-
-    import csv
 
     with OUT.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(

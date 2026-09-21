@@ -522,10 +522,9 @@ def simulate_portfolio(candidates, data):
     candidates_by_date = defaultdict(list)
 
     for trade in candidates:
-        if 20260101 <= trade["entry_date"] <= 20261231:
-            candidates_by_date[
-                trade["entry_date"]
-            ].append(trade)
+        candidates_by_date[
+            trade["entry_date"]
+        ].append(trade)
 
     for date in candidates_by_date:
         candidates_by_date[date].sort(
@@ -539,7 +538,7 @@ def simulate_portfolio(candidates, data):
         date
         for item in data.values()
         for date in item["dates"]
-        if 20260101 <= date <= 20261231
+        if 20250101 <= date <= 20261231
     })
 
     price_map = build_price_map(data)
@@ -737,13 +736,10 @@ def simulate_portfolio(candidates, data):
             "equity": equity,
         })
 
-    # موقعیت‌های باقی‌مانده در انتهای بازه تست
-    # هیچ داده‌ای بعد از 2026 وارد بک‌تست نمی‌شود.
-    last_test_date = all_dates[-1] if all_dates else None
-
+    # موقعیت‌های باقی‌مانده در انتهای داده
     for pos in positions:
         last_price = price_map.get(
-            (pos["inscode"], last_test_date),
+            (pos["inscode"], pos["exit_date"]),
             pos["entry"],
         )
 

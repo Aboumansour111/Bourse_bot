@@ -7,40 +7,34 @@ def main():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
 
-    # آخرین تاریخ موجود در دیتای روزانه
+    # آخرین تاریخ مشترک/موجود در دیتای روزانه
     latest_date_row = conn.execute("""
-        SELECT MAX(dp.trade_date)
-        FROM daily_prices dp
-        JOIN symbols s
-          ON s.inscode = dp.inscode
-        WHERE s.active = 1
-          AND dp.close_price IS NOT NULL
-          AND dp.close_price > 0
+        SELECT MAX(trade_date)
+        FROM daily_prices
+        WHERE close_price IS NOT NULL
+          AND close_price > 0
     """).fetchone()
 
     latest_date = latest_date_row[0]
 
     if latest_date is None:
         conn.close()
-        raise RuntimeError("No daily price data found for active symbols")
+        raise RuntimeError("No daily price data found")
 
-    # دو روز آخر هر نماد فعال
+    # دو روز آخر هر نماد
     rows = conn.execute("""
         WITH ranked AS (
             SELECT
-                dp.inscode,
-                dp.trade_date,
-                dp.close_price,
+                inscode,
+                trade_date,
+                close_price,
                 ROW_NUMBER() OVER (
-                    PARTITION BY dp.inscode
-                    ORDER BY dp.trade_date DESC
+                    PARTITION BY inscode
+                    ORDER BY trade_date DESC
                 ) AS rn
-            FROM daily_prices dp
-            JOIN symbols s
-              ON s.inscode = dp.inscode
-            WHERE s.active = 1
-              AND dp.close_price IS NOT NULL
-              AND dp.close_price > 0
+            FROM daily_prices
+            WHERE close_price IS NOT NULL
+              AND close_price > 0
         )
         SELECT
             inscode,
@@ -85,7 +79,7 @@ def main():
 
     if total == 0:
         conn.close()
-        raise RuntimeError("No comparable daily prices found for active symbols")
+        raise RuntimeError("No comparable daily prices found")
 
     average_change = sum(changes) / len(changes)
     breadth = positive / total
@@ -117,16 +111,13 @@ def main():
         )
     """)
 
-    # حجم و ارزش همان روز، فقط برای نمادهای فعال
+    # حجم و ارزش همان روز
     totals = conn.execute("""
         SELECT
-            COALESCE(SUM(dp.volume), 0),
-            COALESCE(SUM(dp.value), 0)
-        FROM daily_prices dp
-        JOIN symbols s
-          ON s.inscode = dp.inscode
-        WHERE s.active = 1
-          AND dp.trade_date = ?
+            COALESCE(SUM(volume), 0),
+            COALESCE(SUM(value), 0)
+        FROM daily_prices
+        WHERE trade_date = ?
     """, (latest_date,)).fetchone()
 
     total_volume = float(totals[0] or 0)

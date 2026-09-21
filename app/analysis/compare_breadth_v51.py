@@ -19,10 +19,9 @@ PARAM_B = (0.46, 2.0, 3.5, 10)
 
 
 def run_case(data, breadth, params):
-    completed, curve, final, dd = oos_v5b.run_one(
+    return oos_v5b.run_one(
         data, breadth, params, START, END
     )
-    return completed, final, dd
 
 
 def key(t):
@@ -60,8 +59,8 @@ def main():
     print("A = B=0.42 / S=2 / T=3.5 / H=10")
     print("B = B=0.46 / S=2 / T=3.5 / H=10")
 
-    a, final_a, dd_a = run_case(data, breadth, PARAM_A)
-    b, final_b, dd_b = run_case(data, breadth, PARAM_B)
+    a = run_case(data, breadth, PARAM_A)
+    b = run_case(data, breadth, PARAM_B)
 
     ka = {key(t): t for t in a}
     kb = {key(t): t for t in b}

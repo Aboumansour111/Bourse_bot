@@ -375,40 +375,8 @@ async def analyze(update, context):
 
     symbol = context.args[0].strip()
 
-    # Normalize common Arabic/Persian character variants and
-    # remove invisible Unicode formatting characters.
-    symbol = (
-        symbol
-        .replace("ي", "ی")
-        .replace("ى", "ی")
-        .replace("ك", "ک")
-        .replace("\u200c", "")
-        .replace("\u200f", "")
-        .replace("\u200e", "")
-        .replace("\ufeff", "")
-    )
-
     conn = get_db()
 
-    # Resolve the symbol through the master symbols table first.
-    symbol_row = conn.execute("""
-        SELECT inscode, symbol
-        FROM symbols
-        WHERE symbol = ?
-          AND active = 1
-        LIMIT 1
-    """, (symbol,)).fetchone()
-
-    if not symbol_row:
-        conn.close()
-        await update.message.reply_text(
-            f"نماد {symbol} پیدا نشد."
-        )
-        return
-
-    inscode = symbol_row["inscode"]
-
-    # Use inscode as the stable identifier for the analysis result.
     row = conn.execute("""
         SELECT
             d.*,
@@ -416,15 +384,15 @@ async def analyze(update, context):
         FROM decision_results d
         LEFT JOIN symbols s
             ON s.inscode = d.inscode
-        WHERE d.inscode = ?
+        WHERE d.symbol = ?
         LIMIT 1
-    """, (inscode,)).fetchone()
+    """, (symbol,)).fetchone()
 
     conn.close()
 
     if not row:
         await update.message.reply_text(
-            f"برای نماد {symbol} هنوز نتیجه تحلیل موجود نیست."
+            f"نماد {symbol} پیدا نشد."
         )
         return
 

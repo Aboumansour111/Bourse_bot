@@ -13,107 +13,24 @@ HISTORY_TOP = 250
 REQUEST_TIMEOUT = 30
 SLEEP_BETWEEN_REQUESTS = 0.15
 
-# Network/Gateway retry settings
-MAX_RETRIES = 4
-RETRY_BACKOFF = 2
-
-
 def fetch_history(session, inscode):
     url = f"{GATEWAY_URL}/history/{inscode}/{HISTORY_TOP}"
 
-    last_error = None
+    response = session.get(url, timeout=REQUEST_TIMEOUT)
+    response.raise_for_status()
 
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            response = session.get(url, timeout=REQUEST_TIMEOUT)
+    result = response.json()
 
-            # فقط خطاهای موقت Gateway/HTTP را retry می‌کنیم.
-            if response.status_code in (502, 503, 504):
-                raise requests.HTTPError(
-                    f"{response.status_code} Server Error: {response.reason}",
-                    response=response,
-                )
+    if result.get("status") == "error":
+        raise RuntimeError(result.get("error", "gateway returned error"))
 
-            response.raise_for_status()
+    data = result.get("data", {})
+    rows = data.get("closingPriceDaily", [])
 
-            result = response.json()
+    if not isinstance(rows, list):
+        raise RuntimeError("closingPriceDaily is not a list")
 
-            if result.get("status") == "error":
-                error_text = result.get("error", "gateway returned error")
-
-                # خطاهای Gateway که ممکن است موقت باشند.
-                error_lower = str(error_text).lower()
-
-                if any(
-                    x in error_lower
-                    for x in (
-                        "502",
-                        "503",
-                        "504",
-                        "bad gateway",
-                        "gateway timeout",
-                        "connection",
-                        "timeout",
-                    )
-                ):
-                    raise RuntimeError(error_text)
-
-                # خطای غیرموقت Gateway
-                raise RuntimeError(error_text)
-
-            data = result.get("data", {})
-            rows = data.get("closingPriceDaily", [])
-
-            if not isinstance(rows, list):
-                raise RuntimeError("closingPriceDaily is not a list")
-
-            return rows
-
-        except (requests.Timeout, requests.ConnectionError) as exc:
-            last_error = exc
-
-        except requests.HTTPError as exc:
-            last_error = exc
-
-            # فقط 502/503/504 retry شوند.
-            status = exc.response.status_code if exc.response is not None else None
-
-            if status not in (502, 503, 504):
-                raise
-
-        except RuntimeError as exc:
-            last_error = exc
-            error_lower = str(exc).lower()
-
-            # RuntimeError مربوط به خطاهای موقت Gateway
-            if not any(
-                x in error_lower
-                for x in (
-                    "502",
-                    "503",
-                    "504",
-                    "bad gateway",
-                    "gateway timeout",
-                    "connection",
-                    "timeout",
-                )
-            ):
-                raise
-
-        if attempt < MAX_RETRIES:
-            delay = RETRY_BACKOFF * (2 ** (attempt - 1))
-
-            print(
-                f"    retry {attempt}/{MAX_RETRIES - 1} "
-                f"inscode={inscode} "
-                f"after {delay}s: "
-                f"{type(last_error).__name__}: {last_error}",
-                flush=True,
-            )
-
-            time.sleep(delay)
-
-    raise last_error
+    return rows
 
 
 def save_history(conn, inscode, rows):
@@ -213,8 +130,6 @@ def main():
     print("Time:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     print("Symbols requiring backfill:", total)
     print("History requested per symbol:", HISTORY_TOP)
-    print("Max network retries:", MAX_RETRIES)
-    print("Retry backoff:", "2s, 4s, 8s")
     print("=" * 70, flush=True)
 
     success = 0

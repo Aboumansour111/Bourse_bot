@@ -666,40 +666,17 @@ async def buy_command(update, context):
     try:
         conn = get_db()
 
-        # Resolve the symbol using the same Persian/Arabic Unicode
-        # normalization used by /analyze.
-        def normalize_symbol(value):
-            if value is None:
-                return ""
-            return (
-                value.strip()
-                .replace("ي", "ی")
-                .replace("ى", "ی")
-                .replace("ك", "ک")
-                .replace("\u200c", "")
-                .replace("\u200f", "")
-                .replace("\u200e", "")
-                .replace("\ufeff", "")
-            )
-
-        normalized_symbol = normalize_symbol(symbol)
-
-        symbol_rows = conn.execute(
+        stock = conn.execute(
             """
             SELECT inscode, symbol
             FROM symbols
-            WHERE active = 1
+            WHERE symbol = ?
+              AND active = 1
             ORDER BY inscode
-            """
-        ).fetchall()
-
-        stock = next(
-            (
-                row for row in symbol_rows
-                if normalize_symbol(row["symbol"]) == normalized_symbol
-            ),
-            None
-        )
+            LIMIT 1
+            """,
+            (symbol,),
+        ).fetchone()
 
         if not stock:
             conn.close()
@@ -867,40 +844,17 @@ async def sell_command(update, context):
     try:
         conn = get_db()
 
-        # Resolve the symbol using the same Persian/Arabic Unicode
-        # normalization used by /analyze.
-        def normalize_symbol(value):
-            if value is None:
-                return ""
-            return (
-                value.strip()
-                .replace("ي", "ی")
-                .replace("ى", "ی")
-                .replace("ك", "ک")
-                .replace("\u200c", "")
-                .replace("\u200f", "")
-                .replace("\u200e", "")
-                .replace("\ufeff", "")
-            )
-
-        normalized_symbol = normalize_symbol(symbol)
-
-        symbol_rows = conn.execute(
+        stock = conn.execute(
             """
             SELECT inscode, symbol
             FROM symbols
-            WHERE active = 1
+            WHERE symbol = ?
+              AND active = 1
             ORDER BY inscode
-            """
-        ).fetchall()
-
-        stock = next(
-            (
-                row for row in symbol_rows
-                if normalize_symbol(row["symbol"]) == normalized_symbol
-            ),
-            None
-        )
+            LIMIT 1
+            """,
+            (symbol,),
+        ).fetchone()
 
         if not stock:
             conn.close()

@@ -395,8 +395,9 @@ async def analyze(update, context):
 
     conn = get_db()
 
-    # First resolve against the active symbol universe.
-    # Arabic/Persian Unicode variants are normalized on both sides.
+    # Resolve against normalized versions of both the user input
+    # and the database symbol, so Arabic/Persian Unicode variants
+    # do not prevent an exact symbol match.
     symbol_rows = conn.execute("""
         SELECT inscode, symbol
         FROM symbols
@@ -408,30 +409,14 @@ async def analyze(update, context):
         None
     )
 
-    # Some symbols may have a current analysis result even if they are
-    # temporarily absent from the active symbols universe. In that case,
-    # resolve directly from decision_results using the same normalization.
-    if symbol_row:
-        inscode = symbol_row["inscode"]
-    else:
-        decision_rows = conn.execute("""
-            SELECT inscode, symbol
-            FROM decision_results
-        """).fetchall()
-
-        decision_row = next(
-            (r for r in decision_rows if normalize_symbol(r["symbol"]) == symbol),
-            None
+    if not symbol_row:
+        conn.close()
+        await update.message.reply_text(
+            f"نماد {symbol} پیدا نشد."
         )
+        return
 
-        if not decision_row:
-            conn.close()
-            await update.message.reply_text(
-                f"نماد {symbol} پیدا نشد."
-            )
-            return
-
-        inscode = decision_row["inscode"]
+    inscode = symbol_row["inscode"]
 
     # Use inscode as the stable identifier for the analysis result.
     row = conn.execute("""

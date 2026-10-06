@@ -6,6 +6,7 @@ DB_PATH = "/opt/bourse-bot/data/bourse.db"
 UNIVERSE_URL = f"{GATEWAY_URL}/stock-universe"
 
 MIN_UNIVERSE_SIZE = 700
+MIN_DAYS_FOR_ACTIVE = 100
 
 
 def fetch_universe():
@@ -58,12 +59,19 @@ def sync_universe(universe):
         except sqlite3.Error:
             pass
 
-        # 2) All symbols in the current TSETMC universe remain active.
-        # History length controls whether a symbol is analyzable,
-        # not whether its prices/history should be collected.
-        eligible_ids = set(tsetmc_ids)
+        # 2) Eligible symbols (>= MIN_DAYS_FOR_ACTIVE days of data)
+        eligible_rows = con.execute("""
+            SELECT s.inscode
+            FROM symbols s
+            JOIN daily_prices dp
+              ON dp.inscode = s.inscode
+             AND dp.close_price > 0
+            GROUP BY s.inscode
+            HAVING COUNT(dp.trade_date) >= ?
+        """, (MIN_DAYS_FOR_ACTIVE,)).fetchall()
+        eligible_ids = {int(r[0]) for r in eligible_rows}
 
-        # 3) Upsert with active flag
+        # 3) Upsert with computed active flag
         insert_sql = """
             INSERT INTO symbols (inscode, symbol, name, market, active)
             VALUES (?, ?, ?, NULL, ?)
@@ -129,7 +137,7 @@ def sync_universe(universe):
         print("Stale symbols:", len(stale_ids))
         print("Deactivated (stale):", len(deactivate_ids))
         print("Skipped (no data):", skipped_no_data)
-        print("Active universe:", len(eligible_ids))
+        print("Eligible (has data):", len(eligible_ids))
         print("Portfolio protected:", len(portfolio_ids))
         print("DB total:", total_count)
         print("DB active:", active_count)
